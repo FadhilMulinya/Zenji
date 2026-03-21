@@ -1,12 +1,26 @@
 {
+  "name": "zenji-server",
+  "version": "1.0.0",
+  "main": "server/app.ts",
+  "scripts": {
+    "dev": "nodemon server/app.ts",
+    "start": "ts-node server/app.ts"
+  },
   "dependencies": {
     "@injectivelabs/sdk-ts": "^1.18.13",
+    "borgen": "^2.0.0",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "mongodb": "^7.1.0",
+    "mongoose": "^9.3.1",
     "nodemon": "^3.1.14",
+    "telegraf": "^4.16.3",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3",
     "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.5.0"
   }
 }
