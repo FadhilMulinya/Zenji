@@ -9,7 +9,7 @@ import Agent from "../../models/Agent.ts";
 
 export interface MyContext extends Context {
   session: {
-    state?: "awaiting_mnemonic" | "awaiting_private_key" | "awaiting_send_address" | "awaiting_send_amount";
+    state?: "awaiting_mnemonic" | "awaiting_private_key" | "awaiting_send_address" | "awaiting_send_amount" | "awaiting_agent_name" | "awaiting_agent_persona";
     tempData?: any;
   };
 }
@@ -140,15 +140,16 @@ export const handleInitiateSend = async (ctx: MyContext) => {
 export const handleText = async (ctx: MyContext) => {
   const state = ctx.session.state;
   const message = ctx.message && "text" in ctx.message ? ctx.message.text : "";
-
-  if (!state) {
-    const response = await agentService.handleMessage(ctx.from!.id.toString(), ctx.from!.username || "", message);
-    await ctx.reply(response);
-    return;
-  }
+  if (!message) return;
 
   try {
     const user = await ensureUser(ctx.from!.id.toString(), ctx.from!.username || "");
+
+    if (!state) {
+      const response = await agentService.handleMessage(user._id.toString(), ctx.from!.username || "", message);
+      await ctx.reply(response);
+      return;
+    }
 
     if (state === "awaiting_mnemonic") {
       await importWalletFromMnemonic(user._id as any, message);
@@ -178,31 +179,63 @@ export const handleText = async (ctx: MyContext) => {
       // In a real scenario, we'd call bankController.sendAssets here
       // But we'd need to decrypt the private key first.
       await ctx.reply(`🚀 Initiating transfer of ${amount} INJ to ${recipient}...\n\n(Transfer logic is being finalized!)`);
+    } else if (state === "awaiting_agent_name") {
+      ctx.session.tempData = { agentName: message };
+      ctx.session.state = "awaiting_agent_persona";
+      await ctx.reply("Got it! Now, what should the persona of this agent be? (e.g. 'A sarcastic crypto trader' or 'A helpful financial assistant')");
+    } else if (state === "awaiting_agent_persona") {
+      const name = ctx.session.tempData?.agentName || "New Agent";
+      const persona = message;
+      
+      ctx.session.state = undefined;
+      ctx.session.tempData = undefined;
+
+      await ctx.reply(`Standby, initializing ${name}... ⚙️`);
+      try {
+        await agentService.createNewAgent(user._id.toString(), name, persona);
+        await ctx.reply(`✅ Successfully created and activated agent: <b>${name}</b>!\n\nPersona: ${persona}\n\nYou can now chat with them directly!`, { parse_mode: "HTML" });
+      } catch (e) {
+        Logger.error({ message: `Failed to create agent: ${e}` });
+        await ctx.reply("❌ Error creating the agent.");
+      }
     }
   } catch (error) {
     await ctx.reply("❌ Operation failed. Please try again or type /cancel.");
   }
 };
 
-export const handleStatus = async (ctx: MyContext) => {
+export const handleMyAgents = async (ctx: MyContext) => {
   try {
     const user = await ensureUser(ctx.from!.id.toString(), ctx.from!.username || "");
     const userAgents = await Agent.find({ user_id: user._id });
 
     if (!userAgents || userAgents.length === 0) {
-      return ctx.reply("You have no active agents. Type something to launch one!");
+      return ctx.reply("You have no agents. Click below to create one!", Markup.inlineKeyboard([
+        [Markup.button.callback("🤖 Create New Agent", "create_agent")]
+      ]));
     }
 
-    let msg = "🤖 <b>Your Active Agents:</b>\n\n";
+    let msg = "🤖 <b>Your Agents:</b>\n\n";
     userAgents.forEach(agent => {
-      msg += `• <b>${agent.name}</b> (${agent.character_name})\nStatus: <code>${agent.status}</code>\n\n`;
+      msg += `• <b>${agent.name}</b>\nPersona: <i>${agent.persona || agent.character_name}</i>\nStatus: <code>${agent.status}</code>\n\n`;
     });
 
-    await ctx.reply(msg, { parse_mode: "HTML" });
+    await ctx.reply(msg, {
+      parse_mode: "HTML",
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback("🤖 Create New Agent", "create_agent")]
+      ])
+    });
   } catch (error) {
-    Logger.error({ message: `Error in handleStatus: ${error}` });
-    await ctx.reply("Failed to fetch agent status.");
+    Logger.error({ message: `Error in handleMyAgents: ${error}` });
+    await ctx.reply("Failed to fetch your agents.");
   }
+};
+
+export const handleCreateAgentPrompt = async (ctx: MyContext) => {
+  if (ctx.callbackQuery) await ctx.answerCbQuery();
+  ctx.session.state = "awaiting_agent_name";
+  await ctx.reply("Let's create a new agent! What would you like to name them?");
 };
 
 

@@ -1,4 +1,4 @@
-import { Telegraf, Context } from "telegraf";
+import { Telegraf, Context, session } from "telegraf";
 import { ENV } from "./environments.ts";
 import { Logger } from "borgen";
 import * as telegramController from "../controllers/telegram/telegram.controller.ts";
@@ -12,9 +12,10 @@ class TelegramService {
     }
     this.bot = new Telegraf<telegramController.MyContext>(ENV.BOT_TOKEN);
     
-    // Simple local session store
+    // Use Telegraf's built-in session middleware for in-memory session persistence
+    this.bot.use(session());
     this.bot.use((ctx, next) => {
-      ctx.session = ctx.session || {};
+      ctx.session ??= {};
       return next();
     });
 
@@ -25,11 +26,11 @@ class TelegramService {
     // Commands
     this.bot.start(telegramController.handleStart);
     this.bot.command("account", telegramController.handleAccount);
-    this.bot.command("status", telegramController.handleStatus);
-    this.bot.command("agents", telegramController.handleStatus);
+    this.bot.command("myagents", telegramController.handleMyAgents);
+    this.bot.command("createagent", telegramController.handleCreateAgentPrompt);
     this.bot.command("help", (ctx) => {
       ctx.reply(
-        "Available commands:\n/start - Manage your wallet\n/account - Check balance & faucet\n/status - Check agent status\n/help - Show this message\n/cancel - Cancel current operation"
+        "Available commands:\n/start - Manage your wallet\n/account - Check balance & faucet\n/myagents - View and manage your agents\n/createagent - Spawn a new AI agent\n/help - Show this message\n/cancel - Cancel current operation"
       );
     });
     this.bot.command("cancel", async (ctx) => {
@@ -43,6 +44,7 @@ class TelegramService {
     this.bot.action("import_private_key", telegramController.handleImportPrivateKeyAction);
     this.bot.action("receive_faucet", telegramController.handleFaucet);
     this.bot.action("initiate_send", telegramController.handleInitiateSend);
+    this.bot.action("create_agent", telegramController.handleCreateAgentPrompt);
 
     // Generic text
     this.bot.on("text", telegramController.handleText);

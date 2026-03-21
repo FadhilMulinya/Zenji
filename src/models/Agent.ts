@@ -5,6 +5,7 @@ export interface IAgent extends Document {
   user_id: mongoose.Types.ObjectId;
   name: string;
   character_name: string;
+  persona: string;
   status: "active" | "inactive";
   agent_id: UUID;
   room_id: UUID;
@@ -17,6 +18,7 @@ const AgentSchema: Schema = new Schema(
     user_id: { type: Schema.Types.ObjectId, ref: "User", required: true },
     name: { type: String, required: true },
     character_name: { type: String, required: true, default: "Zenji" },
+    persona: { type: String, required: false },
     status: {
       type: String,
       enum: ["active", "inactive"],

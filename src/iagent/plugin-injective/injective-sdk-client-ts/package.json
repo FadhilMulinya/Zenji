@@ -2,6 +2,7 @@
 	"name": "@injectivelabs/injective-sdk-client-ts",
 	"version": "1.0.0",
 	"description": "Injective Protocol TypeScript Library",
+	"type": "module",
 	"main": "dist/index.js",
 	"types": "dist/index.d.ts",
 	"scripts": {

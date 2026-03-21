@@ -12,7 +12,7 @@ import {
 	generateObjectDeprecated,
 	generateText,
 } from "@elizaos/core";
-import { InjectiveGrpcClient } from "@injective/modules";
+// Dynamic import used later to avoid circular dependency
 
 /**
  * Shape of the arguments to create our generic action.
@@ -110,6 +110,10 @@ export function createGenericAction({
 				) {
 					throw new Error("Incorrect configuration");
 				}
+
+				const { InjectiveGrpcClient } = await import(
+					"@injective/modules/index.ts"
+				);
 
 				const client = new InjectiveGrpcClient(
 					network,
