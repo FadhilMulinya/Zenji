@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "lib": ["ESNext", "DOM"],
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@elizaos/core": ["src/iagent/core/src/index.ts"],
+      "@elizaos/plugin-injective": ["src/iagent/plugin-injective/src/index.ts"],
+      "@injective/*": ["src/iagent/plugin-injective/injective-sdk-client-ts/src/*"]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": [
+    "node_modules",
+    "src/iagent/plugin-injective/injective-sdk-client-ts/src/modules/permissions.ts",
+    "src/iagent/plugin-injective/injective-sdk-client-ts/src/modules/gov.ts",
+    "src/iagent/plugin-injective/injective-sdk-client-ts/src/modules/insurance.ts"
+  ]
+}
