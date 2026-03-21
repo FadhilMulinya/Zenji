@@ -1,26 +1,36 @@
-import { PrivateKey } from '@injectivelabs/sdk-ts';
-import { randomBytes } from 'crypto';
+import { generateInjectiveWallet, walletFromMnemonic, walletFromPrivateKey, GeneratedInjectiveWallet } from "../../lib/wallet";
+import { encryptPrivateKey, encryptMnemonic } from "../../lib/crypto";
+import Wallet from "../../models/Wallet";
+import { Types } from "mongoose";
 
-/**
- * Generate a new Injective wallet locally.
- * Returns the bech32 address and raw private key (hex).
- */
-export function generateInjectiveWallet() {
-  // 32 bytes secp256k1 private key
-  const privKeyBytes = randomBytes(32);
-  const privKeyHex = privKeyBytes.toString('hex');
+export const createNewWallet = async (userId: Types.ObjectId) => {
+  const walletData = generateInjectiveWallet();
+  return await saveWallet(userId, walletData);
+};
 
-  // Create PrivateKey instance
-  const privateKey = PrivateKey.fromHex(privKeyHex); // [web:82][web:86]
+export const importWalletFromMnemonic = async (userId: Types.ObjectId, mnemonic: string) => {
+  const walletData = walletFromMnemonic(mnemonic);
+  return await saveWallet(userId, walletData);
+};
 
-  // Derive Injective address
-  const injectiveAddress = privateKey.toBech32(); // inj1... [web:86][web:87]
-  console.log(`injectiveAddress: ${injectiveAddress}, privKeyHex: ${privKeyHex}, privateKey: ${privateKey}`);
+export const importWalletFromPrivateKey = async (userId: Types.ObjectId, privateKeyHex: string) => {
+  const walletData = walletFromPrivateKey(privateKeyHex);
+  return await saveWallet(userId, walletData);
+};
 
-  return {
-    injectiveAddress,
-    privKeyHex
-  };
-}
+const saveWallet = async (userId: Types.ObjectId, walletData: GeneratedInjectiveWallet) => {
+  const encryptedPrivateKey = encryptPrivateKey(walletData.privateKeyHex);
+  const encryptedMnemonic = walletData.mnemonic ? encryptMnemonic(walletData.mnemonic) : undefined;
 
-generateInjectiveWallet()
+  const wallet = new Wallet({
+    user_id: userId,
+    injective_address: walletData.injectiveAddress,
+    ethereum_address: walletData.ethereumAddress,
+    public_key_hex: walletData.publicKeyHex,
+    encrypted_private_key: encryptedPrivateKey,
+    encrypted_mnemonic: encryptedMnemonic,
+    network: "testnet",
+  });
+
+  return await wallet.save();
+};

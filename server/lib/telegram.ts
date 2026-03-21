@@ -1,55 +1,49 @@
-import { Telegraf } from "telegraf";
+import { Telegraf, Context } from "telegraf";
 import { ENV } from "./environments";
 import { Logger } from "borgen";
-import User from "../models/User";
+import * as telegramController from "../controllers/telegram/telegram.controller";
 
 class TelegramService {
-  private bot: Telegraf;
+  private bot: Telegraf<telegramController.MyContext>;
 
   constructor() {
     if (!ENV.BOT_TOKEN) {
       throw new Error("BOT_TOKEN is not defined in environment variables");
     }
-    this.bot = new Telegraf(ENV.BOT_TOKEN);
+    this.bot = new Telegraf<telegramController.MyContext>(ENV.BOT_TOKEN);
+    
+    // Simple local session store
+    this.bot.use((ctx, next) => {
+      ctx.session = ctx.session || {};
+      return next();
+    });
+
     this.setupHandlers();
   }
 
   private setupHandlers() {
-    // /start command
-    this.bot.start(async (ctx) => {
-      const telegram_user_id = ctx.from.id.toString();
-      const first_name = ctx.from.first_name || "Trader";
-
-      try {
-        let user = await User.findOne({ telegram_user_id });
-        if (!user) {
-          user = new User({ telegram_user_id });
-          await user.save();
-          Logger.info({ message: `New user registered: ${telegram_user_id}` });
-        }
-
-        await ctx.reply(
-          `Welcome to Zenji, ${first_name}! 🚀\n\nI am your personal trading assistant on Injective.I can learn your strategy, execute trades on your behalf, and sends instant balance and performance updates.`
-            
-        );
-      } catch (error) {
-        Logger.error({ message: `Error in /start handler: ${error}` });
-        await ctx.reply("Sorry, something went wrong while setting up your account. Please try again later.");
-      }
-    });
-
-    // /help command
-    this.bot.help((ctx) => {
+    // Commands
+    this.bot.start(telegramController.handleStart);
+    this.bot.command("account", telegramController.handleAccount);
+    this.bot.command("help", (ctx) => {
       ctx.reply(
-        "Available commands:\n/start - Start the bot and register\n/help - Show this help message\n\nYou can also describe your trading strategy in plain English!"
+        "Available commands:\n/start - Manage your wallet\n/account - Check balance & faucet\n/help - Show this message\n/cancel - Cancel current operation"
       );
     });
-
-    // Generic text message handler
-    this.bot.on("text", async (ctx) => {
-      const message = ctx.message.text;
-      await ctx.reply(`I received your message: "${message}".\n\nI'm currently being set up to process trading strategies. Stay tuned! 🛠️`);
+    this.bot.command("cancel", async (ctx) => {
+      ctx.session.state = undefined;
+      await ctx.reply("Operation cancelled.");
     });
+
+    // Actions
+    this.bot.action("create_wallet", telegramController.handleCreateWallet);
+    this.bot.action("import_mnemonic", telegramController.handleImportMnemonicAction);
+    this.bot.action("import_private_key", telegramController.handleImportPrivateKeyAction);
+    this.bot.action("receive_faucet", telegramController.handleFaucet);
+    this.bot.action("initiate_send", telegramController.handleInitiateSend);
+
+    // Generic text
+    this.bot.on("text", telegramController.handleText);
   }
 
   public async start() {
