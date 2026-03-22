@@ -10,7 +10,14 @@ class TelegramService {
     if (!ENV.BOT_TOKEN) {
       throw new Error("BOT_TOKEN is not defined in environment variables");
     }
-    this.bot = new Telegraf<tc.MyContext>(ENV.BOT_TOKEN);
+    this.bot = new Telegraf<tc.MyContext>(ENV.BOT_TOKEN, {
+      handlerTimeout: 300_000, // 5 minutes — Ollama can be slow
+    });
+
+    // Global error handler — prevents unhandled errors from crashing the bot
+    this.bot.catch((err: any, ctx: any) => {
+      Logger.error({ message: `Telegraf error for ${ctx.updateType}: ${err.message}` });
+    });
 
     // Session middleware
     this.bot.use(session());

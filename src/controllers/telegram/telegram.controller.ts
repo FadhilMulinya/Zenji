@@ -214,8 +214,18 @@ export const handleText = async (ctx: MyContext) => {
 
     // No session state → route to NLP agent
     if (!state) {
-      const response = await agentService.handleMessage(user._id.toString(), ctx.from!.username || "", message);
-      await ctx.reply(response);
+      // Send typing indicator immediately so the user knows we're working
+      await ctx.sendChatAction("typing");
+
+      // Process in the background — don't block the handler
+      agentService.handleMessage(user._id.toString(), ctx.from!.username || "", message)
+        .then(async (response) => {
+          await ctx.reply(response);
+        })
+        .catch(async (err) => {
+          Logger.error({ message: `NLP processing error: ${err}` });
+          await ctx.reply("Sorry, I took too long to think. Please try again.");
+        });
       return;
     }
 
