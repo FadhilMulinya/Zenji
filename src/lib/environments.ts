@@ -8,6 +8,7 @@ export const ENV = {
   NODE_ENV: process.env.NODE_ENV as string,
   FRONTEND_URLS: process.env.FRONTEND_URLS as string,
   OPENAI_API_KEY:process.env.OPENAI_API_KEY as string,
+  OLLAMA_API_URL:process.env.OLLAMA_API_URL as string,
   // API Docs
   API_DOCS_USER: process.env.API_DOCS_USER || "admin",
   API_DOCS_PASSWORD: process.env.API_DOCS_PASSWORD || "admin",
