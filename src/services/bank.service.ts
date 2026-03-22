@@ -60,6 +60,3 @@ export const sendAssets = async (privateKeyHex: string, toAddress: string, amoun
 
   return txHash;
 };
-
-
-

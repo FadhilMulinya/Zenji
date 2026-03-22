@@ -1,7 +1,7 @@
 import mongoose, { Schema, Document } from "mongoose";
 
 export interface IWallet extends Document {
-  user_id: mongoose.Types.ObjectId;
+  agent_id: mongoose.Types.ObjectId;
   injective_address: string;
   ethereum_address: string;
   public_key_hex: string;
@@ -12,7 +12,7 @@ export interface IWallet extends Document {
 }
 
 const WalletSchema: Schema = new Schema({
-  user_id: { type: Schema.Types.ObjectId, ref: "User", required: true },
+  agent_id: { type: Schema.Types.ObjectId, ref: "Agent", required: true },
   injective_address: { type: String, required: true },
   ethereum_address: { type: String, required: true },
   public_key_hex: { type: String, required: true },
@@ -23,6 +23,3 @@ const WalletSchema: Schema = new Schema({
 });
 
 export default mongoose.model<IWallet>("Wallet", WalletSchema);
-
-
-

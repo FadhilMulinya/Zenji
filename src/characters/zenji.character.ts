@@ -5,7 +5,7 @@ export const zenjiCharacter: Character = {
     username: "zenji_bot",
     plugins: [],
     clients: [],
-    modelProvider: ModelProviderName.OPENAI, // Default, can be overridden
+    modelProvider: ModelProviderName.OLLAMA, // Uses local Ollama by default
     settings: {
         secrets: {},
         voice: {

@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { ENV } from "./environments.ts";
+import { ENV } from "../lib/environments.ts";
 
 const ALGORITHM = "aes-256-cbc";
 const KEY = crypto.scryptSync(ENV.JWT_SECRET || "default_secret", "salt", 32);
@@ -25,6 +25,3 @@ export const encryptPrivateKey = encrypt;
 export const encryptMnemonic = encrypt;
 export const decryptPrivateKey = decrypt;
 export const decryptMnemonic = decrypt;
-
-
-

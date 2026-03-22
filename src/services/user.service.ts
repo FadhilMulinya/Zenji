@@ -1,4 +1,4 @@
-import User from "../../models/User.ts";
+import User from "../models/User.ts";
 import { Logger } from "borgen";
 
 export const ensureUser = async (telegram_user_id: string, telegram_user_name: string) => {
@@ -18,6 +18,3 @@ export const ensureUser = async (telegram_user_id: string, telegram_user_name: s
     throw error;
   }
 };
-
-
-

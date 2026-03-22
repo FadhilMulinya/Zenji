@@ -1,18 +1,18 @@
 import { Telegraf, Context, session } from "telegraf";
 import { ENV } from "./environments.ts";
 import { Logger } from "borgen";
-import * as telegramController from "../controllers/telegram/telegram.controller.ts";
+import * as tc from "../controllers/telegram/telegram.controller.ts";
 
 class TelegramService {
-  private bot: Telegraf<telegramController.MyContext>;
+  private bot: Telegraf<tc.MyContext>;
 
   constructor() {
     if (!ENV.BOT_TOKEN) {
       throw new Error("BOT_TOKEN is not defined in environment variables");
     }
-    this.bot = new Telegraf<telegramController.MyContext>(ENV.BOT_TOKEN);
-    
-    // Use Telegraf's built-in session middleware for in-memory session persistence
+    this.bot = new Telegraf<tc.MyContext>(ENV.BOT_TOKEN);
+
+    // Session middleware
     this.bot.use(session());
     this.bot.use((ctx, next) => {
       ctx.session ??= {};
@@ -24,35 +24,41 @@ class TelegramService {
 
   private setupHandlers() {
     // Commands
-    this.bot.start(telegramController.handleStart);
-    this.bot.command("account", telegramController.handleAccount);
-    this.bot.command("myagents", telegramController.handleMyAgents);
-    this.bot.command("createagent", telegramController.handleCreateAgentPrompt);
+    this.bot.start(tc.handleStart);
+    this.bot.command("account", tc.handleAccount);
+    this.bot.command("myagents", tc.handleMyAgents);
+    this.bot.command("switchagent", tc.handleSwitchAgent);
+    this.bot.command("createagent", tc.handleCreateAgentPrompt);
     this.bot.command("help", (ctx) => {
       ctx.reply(
-        "Available commands:\n/start - Manage your wallet\n/account - Check balance & faucet\n/myagents - View and manage your agents\n/createagent - Spawn a new AI agent\n/help - Show this message\n/cancel - Cancel current operation"
+        "Available commands:\n" +
+        "/start - Welcome & status\n" +
+        "/createagent - Create a new AI agent\n" +
+        "/myagents - View your agents\n" +
+        "/switchagent - Switch active agent\n" +
+        "/account - Check active agent's balance\n" +
+        "/help - Show this message\n" +
+        "/cancel - Cancel current operation"
       );
     });
     this.bot.command("cancel", async (ctx) => {
       ctx.session.state = undefined;
+      ctx.session.tempData = undefined;
       await ctx.reply("Operation cancelled.");
     });
 
-    // Actions
-    this.bot.action("create_wallet", telegramController.handleCreateWallet);
-    this.bot.action("import_mnemonic", telegramController.handleImportMnemonicAction);
-    this.bot.action("import_private_key", telegramController.handleImportPrivateKeyAction);
-    this.bot.action("receive_faucet", telegramController.handleFaucet);
-    this.bot.action("initiate_send", telegramController.handleInitiateSend);
-    this.bot.action("create_agent", telegramController.handleCreateAgentPrompt);
+    // Callback actions
+    this.bot.action("create_agent", tc.handleCreateAgentPrompt);
+    this.bot.action("receive_faucet", tc.handleFaucet);
+    this.bot.action(/^switch_agent:/, tc.handleSwitchAgentCallback);
 
     // Generic text
-    this.bot.on("text", telegramController.handleText);
+    this.bot.on("text", tc.handleText);
   }
 
   public async start() {
     try {
-      Logger.info({ message: `Launching Telegram bot with token prefix: ${ENV.BOT_TOKEN ? ENV.BOT_TOKEN.substring(0, 5) + "..." : "undefined"}` });
+      Logger.info({ message: `Launching Telegram bot...` });
       await this.bot.launch();
       Logger.info({ message: "Telegram bot launched successfully" });
     } catch (error) {
@@ -67,6 +73,3 @@ class TelegramService {
 }
 
 export const telegramService = new TelegramService();
-
-
-
