@@ -132,7 +132,7 @@ src/
 
 ##  AI Models & Providers
 
-Zenji is model‑agnostic. By default, it uses **Ollama** (`llama3.2:3b`) for local execution. You can switch to **OpenAI** or **Anthropic** in `agent.service.ts` to upgrade your agent's reasoning power.
+Zenji is model‑agnostic. By default, it uses **Ollama** (`llama3.2:3b`) for local execution and with ollama you dont need an api key and your prompts are stored locally on your machine. You can switch to **OpenAI** or **Anthropic** in `agent.service.ts` to upgrade your agent's reasoning power.
 
 ---
 
