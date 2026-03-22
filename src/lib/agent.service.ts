@@ -13,9 +13,8 @@ import {
     generateMessageResponse,
     stringToUuid
 } from "@elizaos/core";
-import { generateObject } from "ai";
+import { generateText as aiSdkGenerateText } from "ai";
 import { createOllama } from "ollama-ai-provider";
-import { z } from "zod";
 import { injectivePlugin } from "@elizaos/plugin-injective";
 import { v4 as uuidv4 } from "uuid";
 import { MongoDBAdapter } from "./mongo-adapter.ts";
@@ -93,28 +92,56 @@ class AgentService {
         // Deactivate all other agents for this user
         await Agent.updateMany({ user_id: userId as any }, { status: "inactive" });
 
-        let characterConfig;
+        let characterConfig: any = null;
         try {
             const ollama = createOllama({ baseURL: ENV.OLLAMA_API_URL || "http://localhost:11434/api" });
-            const { object } = await generateObject({
+            const { text: rawText } = await aiSdkGenerateText({
                 model: ollama("llama3.2:3b"),
-                schema: z.object({
-                    bio: z.array(z.string()),
-                    lore: z.array(z.string()),
-                    style: z.object({
-                        all: z.array(z.string()),
-                        chat: z.array(z.string()),
-                        post: z.array(z.string()),
-                    }),
-                    adjectives: z.array(z.string()),
-                    topics: z.array(z.string()),
-                }),
-                prompt: `Create a rich character profile for an AI agent named "${name}".\nPersona description:\n"${persona}"\n\nGenerate bio, lore, style guidelines, adjectives, and topics reflecting this persona.\n\nIMPORTANT: Return ONLY a raw JSON object matching the exact schema. Do NOT wrap it in markdown backticks. Do NOT write \`\`\`json. Do NOT include any introductory or concluding text.`
+                prompt: `You are a JSON generator. Generate a character profile for an AI trading agent.
+
+Agent Name: "${name}"
+Persona: "${persona}"
+
+Return ONLY this JSON structure with NO other text, NO markdown, NO explanation:
+{"bio":["short bio line 1","short bio line 2"],"lore":["backstory detail 1","backstory detail 2"],"style":{"all":["style rule 1"],"chat":["chat style 1"],"post":["post style 1"]},"adjectives":["adj1","adj2","adj3"],"topics":["topic1","topic2","topic3"]}
+
+Fill in the values based on the persona. Return ONLY the JSON.`
             });
-            characterConfig = object;
+
+            // Extract JSON from the response (handle markdown wrapping, conversational text, etc.)
+            let jsonStr = rawText.trim();
+            const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                jsonStr = jsonMatch[0];
+            }
+            const parsed = JSON.parse(jsonStr);
+
+            // Validate minimum structure
+            if (parsed.bio && parsed.adjectives && parsed.topics) {
+                characterConfig = parsed;
+                Logger.info({ message: `Successfully generated character config for ${name}` });
+            } else {
+                throw new Error("Parsed JSON missing required fields");
+            }
         } catch (err) {
-            Logger.error({ message: `Error generating character traits using Ollama: ${err}` });
-            throw new Error("Failed to generate character metadata. Cannot create bot.");
+            Logger.warn({ message: `AI character generation failed (${err}), using fallback.` });
+        }
+
+        // Deterministic fallback: build a config from the persona string directly
+        if (!characterConfig) {
+            const personaWords = persona.split(/\s+/);
+            characterConfig = {
+                bio: [`${name} is an AI agent on Injective.`, persona],
+                lore: [`Created by a user who wanted: ${persona}`],
+                style: {
+                    all: ["Be helpful and knowledgeable about crypto trading", "Stay in character"],
+                    chat: ["Be conversational and engaging", "Use emojis occasionally"],
+                    post: ["Be concise and informative"],
+                },
+                adjectives: personaWords.filter(w => w.length > 3).slice(0, 5).concat(["knowledgeable", "crypto-savvy"]),
+                topics: ["cryptocurrency", "Injective", "trading", "DeFi", "blockchain"],
+            };
+            Logger.info({ message: `Using fallback character config for ${name}` });
         }
 
         const agentDoc = await Agent.create({
