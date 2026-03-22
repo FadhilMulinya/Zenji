@@ -37,7 +37,7 @@ function buildFullCharacter(name: string, persona: string, aiTraits: any): Chara
         topics: aiTraits?.topics || zenjiCharacter.topics,
         adjectives: aiTraits?.adjectives || zenjiCharacter.adjectives,
         style: aiTraits?.style || zenjiCharacter.style,
-        plugins: [],
+        plugins: [injectivePlugin],
         clients: [],
         settings: {
             secrets: {},
@@ -202,8 +202,43 @@ class AgentService {
 
     // ── NLP Message handling ──
     // NOTE: We bypass Eliza's generateMessageResponse() because it has a
-    // while(true) loop that retries forever when the model returns plain text
-    // instead of JSON. For llama3.2:3b we use direct Ollama calls instead.
+    // ── Wallet context for grounding the LLM with real data ──
+
+    private async fetchWalletContext(agentDocId: any): Promise<string | null> {
+        try {
+            const wallet = await Wallet.findOne({ agent_id: agentDocId });
+            if (!wallet) return null;
+
+            const { getBalances } = await import("./bank.service.ts");
+            const balances = await getBalances(wallet.injective_address);
+
+            if (!balances || balances.length === 0) {
+                return `Wallet: ${wallet.injective_address}\nNo balances found on-chain.`;
+            }
+
+            const DENOM_DECIMALS: Record<string, number> = {
+                inj: 18,
+                // peggy USDT
+                "peggy0xdAC17F958D2ee523a2206206994597C13D831ec7": 6,
+            };
+            const DENOM_LABELS: Record<string, string> = {
+                inj: "INJ",
+                "peggy0xdAC17F958D2ee523a2206206994597C13D831ec7": "USDT",
+            };
+
+            const formatted = balances.map((bal: any) => {
+                const decimals = DENOM_DECIMALS[bal.denom] ?? 18;
+                const amount = (parseFloat(bal.amount) / Math.pow(10, decimals)).toFixed(4);
+                const label = DENOM_LABELS[bal.denom] || bal.denom;
+                return `  ${label}: ${amount}`;
+            }).join("\n");
+
+            return `Wallet address: ${wallet.injective_address}\nOn-chain balances:\n${formatted}`;
+        } catch (err) {
+            Logger.warn({ message: `[fetchWalletContext] Failed: ${err}` });
+            return null;
+        }
+    }
 
     public async handleMessage(userId: string, telegramUserName: string, text: string): Promise<string> {
         try {
@@ -216,17 +251,31 @@ class AgentService {
             Logger.info({ message: `[handleMessage] Runtime loaded in ${Date.now() - t0}ms` });
 
             const agentDoc = await Agent.findOne({ user_id: userId, status: "active" });
+            if (!agentDoc) {
+                Logger.warn({ message: `[handleMessage] No active agent found for user ${userId}` });
+                return "You don't have an active agent. Please use /createagent to launch one!";
+            }
             const character = runtime.character;
+
+            // Construct user memory early (so composeState can use it)
+            const userMemory: Memory = {
+                id: stringToUuid(Date.now().toString()),
+                userId: stringToUuid(userId),
+                agentId: runtime.agentId,
+                roomId: agentDoc.room_id as UUID,
+                content: { text, source: "telegram" },
+                createdAt: Date.now(),
+            };
 
             // Fetch recent conversation history from memory
             const t1 = Date.now();
             const recentMemories = await runtime.messageManager.getMemories({
-                roomId: agentDoc!.room_id as UUID,
+                roomId: agentDoc.room_id as UUID,
                 count: 8,
             });
             Logger.info({ message: `[handleMessage] Memory fetched in ${Date.now() - t1}ms` });
 
-            // Build a simple conversation history string
+            // Build conversation history string
             const historyLines = recentMemories
                 .reverse()
                 .map(m => {
@@ -236,7 +285,18 @@ class AgentService {
                 })
                 .join("\n");
 
-            // Direct Ollama call — one shot, plain text, no JSON parse loop
+            // Detect if this is a balance/portfolio query and inject real data
+            const balanceKeywords = /balance|portfolio|how much|inj|usdt|token|asset|worth|wallet/i;
+            let walletContext = "";
+            if (balanceKeywords.test(text)) {
+                Logger.info({ message: `[handleMessage] Balance query detected — fetching real on-chain data` });
+                const ctx = await this.fetchWalletContext(agentDoc._id);
+                if (ctx) {
+                    walletContext = `\n[REAL WALLET DATA — use these exact numbers, do NOT make up values]\n${ctx}\n`;
+                }
+            }
+
+            // Direct Ollama call — one shot, plain text
             const ollama = createOllama({
                 baseURL: ENV.OLLAMA_API_URL || "http://localhost:11434/api"
             });
@@ -245,7 +305,20 @@ class AgentService {
                 ? character.bio.slice(0, 2).join(" ")
                 : (character.bio || "");
 
+            // Fetch Eliza's state to get provider data (like wallet info)
+            const elizaState = await runtime.composeState(userMemory);
+            const providerContext = elizaState.walletInfo || ""; 
+
             const prompt = `You are ${character.name}. ${bio}
+
+[RELEVANT CONTEXT]
+${providerContext}
+${walletContext}
+
+[INSTRUCTIONS]
+- To send/transfer tokens, conclude your response with: "SEND_TOKEN"
+- To swap tokens, conclude your response with: "SWAP_TOKEN"
+- Otherwise, just chat normally.
 
 Conversation:
 ${historyLines}
@@ -266,25 +339,33 @@ ${character.name}:`;
                 return "I processed your message but had nothing to say. Try again!";
             }
 
+            // Detect if an action is needed based on the response
+            const actionKeywords = ["SEND_TOKEN", "SWAP_TOKEN", "EXECUTE_ACTION"];
+            const detectedAction = actionKeywords.find(a => reply.includes(a));
+
             // Store user message + agent reply in memory for future context
-            const userMemory: Memory = {
-                id: stringToUuid(Date.now().toString()),
-                userId: stringToUuid(userId),
-                agentId: runtime.agentId,
-                roomId: agentDoc!.room_id as UUID,
-                content: { text, source: "telegram" },
-                createdAt: Date.now(),
-            };
             const agentMemory: Memory = {
                 id: stringToUuid(uuidv4()),
                 userId: runtime.agentId,
                 agentId: runtime.agentId,
-                roomId: agentDoc!.room_id as UUID,
-                content: { text: reply, source: "telegram" },
+                roomId: agentDoc.room_id as UUID,
+                content: { 
+                    text: reply, 
+                    source: "telegram",
+                    action: detectedAction || undefined 
+                },
                 createdAt: Date.now() + 1,
             };
             await runtime.messageManager.createMemory(userMemory);
             await runtime.messageManager.createMemory(agentMemory);
+
+            // Trigger Eliza's state-based action processing if an action is detected or implied
+            if (detectedAction || /send|transfer|swap|trade|buy|sell/i.test(text)) {
+                Logger.info({ message: `[handleMessage] Triggering action processing for: ${detectedAction || "IMPLIED ACTION"}` });
+                // We re-compose state to make sure actions have latest data
+                const state = await runtime.composeState(userMemory);
+                await runtime.processActions(userMemory, [agentMemory], state);
+            }
 
             Logger.info({ message: `[handleMessage] Total: ${Date.now() - t0}ms — "${reply.substring(0, 80)}"` });
             return reply;

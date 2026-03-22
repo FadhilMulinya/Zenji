@@ -1,7 +1,7 @@
 import { Context, Markup } from "telegraf";
 import { Logger } from "borgen";
 import { ensureUser } from "../../services/user.service.ts";
-import { getBalances, receiveFaucet } from "../../services/bank.service.ts";
+import { getBalances, receiveFaucet, formatBalances } from "../../services/bank.service.ts";
 import { agentService } from "../../services/agent.service.ts";
 import Wallet from "../../models/Wallet.ts";
 
@@ -70,15 +70,7 @@ export const handleAccount = async (ctx: MyContext) => {
     balanceMsg += `Injective: <code>${wallet.injective_address}</code>\n`;
     balanceMsg += `EVM: <code>${wallet.ethereum_address}</code>\n\n`;
 
-    if (!balances || balances.length === 0) {
-      balanceMsg += "No assets found.";
-    } else {
-      balances.forEach((bal: any) => {
-        const amount = (parseFloat(bal.amount) / 1e18).toFixed(4);
-        const denom = bal.denom.startsWith("factory/") ? bal.denom.split("/").pop() : bal.denom;
-        balanceMsg += `• ${amount} ${denom!.toUpperCase()}\n`;
-      });
-    }
+    balanceMsg += formatBalances(balances);
 
     await ctx.reply(balanceMsg, {
       parse_mode: "HTML",

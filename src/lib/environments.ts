@@ -22,6 +22,7 @@ export const ENV = {
   ADMIN_INITIAL_PASS: process.env.ADMIN_INITIAL_PASS as string,
   ADMIN_INITIAL_EMAIL: process.env.ADMIN_INITIAL_EMAIL as string,
   RESEND_KEY: process.env.RESEND_KEY as string,
+  INJECTIVE_NETWORK: process.env.INJECTIVE_NETWORK || "testnet",
 };
 
 // ── Inject Ollama settings into process.env for iagent core ──
