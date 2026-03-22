@@ -318,8 +318,9 @@ ${providerContext}
 ${walletContext}
 
 [INSTRUCTIONS]
-- To send/transfer tokens, conclude your response with a JSON block: \`\`\`json\n{"action":"SEND_TOKEN", "recipient":"[address]", "amount":[number], "denom":"[INJ or USDT]"}\n\`\`\`
-- To swap tokens, conclude your response with a JSON block: \`\`\`json\n{"action":"SWAP_TOKEN", "fromToken":"[INJ or USDT]", "toToken":"[INJ or USDT]", "amount":[number in INJ]}\n\`\`\`
+- To send/transfer tokens, conclude your response ONLY when you have the actual recipient address and amount, with this exact JSON: \`\`\`json\n{"action":"SEND_TOKEN", "recipient":"actual_injective_address", "amount":1.5, "denom":"INJ"}\n\`\`\`
+- To swap tokens, conclude your response ONLY when you know the amount to swap, with this exact JSON: \`\`\`json\n{"action":"SWAP_TOKEN", "fromToken":"USDT", "toToken":"INJ", "amount":1.5}\n\`\`\`
+- IF you are missing information (like the recipient address or the amount), ASK the user for it. Do NOT output a JSON block with placeholders like "[address]" or "[number]".
 - Otherwise, just chat normally. Do NOT output JSON if you only want to chat.
 
 Conversation:
@@ -346,12 +347,26 @@ ${character.name}:`;
             const actionKeywords = ["SEND_TOKEN", "SWAP_TOKEN"];
             const detectedAction = actionKeywords.find(a => reply.includes(a));
             
+            // Try to match a JSON block (wrapped in markdown or raw object)
+            let jsonMatch = reply.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+            if (!jsonMatch) {
+                jsonMatch = reply.match(/(\{[\s\S]*?"action"\s*:\s*"(?:SEND_TOKEN|SWAP_TOKEN)"[\s\S]*?\})/);
+            }
+            
             // If the LLM returned a JSON block for an action, execute it via the custom wrapper
-            if (reply.includes("```json") && detectedAction) {
+            if (jsonMatch && detectedAction) {
                 try {
-                    const jsonMatch = reply.match(/```json\s*(\{[\s\S]*?\})\s*```/);
-                    if (jsonMatch) {
-                        const actionData = JSON.parse(jsonMatch[1]);
+                    const actionData = JSON.parse(jsonMatch[1]);
+                    
+                    // STRICT VALIDATION
+                    const amountRaw = Number(actionData.amount);
+                    if (isNaN(amountRaw) || amountRaw <= 0) {
+                        throw new Error("Invalid or missing transaction amount. Please provide a valid positive number.");
+                    }
+                    if (actionData.action === "SEND_TOKEN" && (!actionData.recipient || actionData.recipient.includes("["))) {
+                        throw new Error("Invalid recipient address. Please provide a real injective address.");
+                    }
+                    actionData.amount = amountRaw; // Reassign the verified numeric value
                         const wallet = await Wallet.findOne({ agent_id: agentDoc._id });
                         if (!wallet) throw new Error("Agent wrapper wallet not configured yet.");
                         
@@ -366,7 +381,6 @@ ${character.name}:`;
                             txHash = await InjectiveService.swapTokens(privateKey, actionData.fromToken, actionData.toToken, actionData.amount);
                             finalReply = `I have successfully swapped ${actionData.amount} ${actionData.fromToken} on the Spot Market.\n\nTransaction Hash: ${txHash}`;
                         }
-                    }
                 } catch (err: any) {
                     Logger.error({ message: `[handleMessage] Custom wrapper action failed: ${err.message}` });
                     finalReply = `I tried to process your transaction but an error occurred: ${err.message}`;
