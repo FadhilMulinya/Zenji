@@ -208,10 +208,13 @@ class AgentService {
 
     public async handleMessage(userId: string, telegramUserName: string, text: string): Promise<string> {
         try {
+            const t0 = Date.now();
+
             const runtime = await this.getActiveRuntime(userId);
             if (!runtime) {
                 return "You don't have an active agent. Please use /createagent to launch one!";
             }
+            Logger.info({ message: `[handleMessage] Runtime loaded in ${Date.now() - t0}ms` });
 
             const agentDoc = await Agent.findOne({ user_id: userId, status: "active" });
 
@@ -224,45 +227,35 @@ class AgentService {
                 createdAt: Date.now(),
             };
 
+            const t1 = Date.now();
             await runtime.messageManager.createMemory(message);
+            Logger.info({ message: `[handleMessage] Memory created in ${Date.now() - t1}ms` });
+
+            const t2 = Date.now();
             const state = await runtime.composeState(message);
+            Logger.info({ message: `[handleMessage] State composed in ${Date.now() - t2}ms` });
 
-            const messageHandlerTemplate = `# Action Examples
-{{actionExamples}}
-
-# Knowledge
-{{knowledge}}
-
-# Task: Generate dialog and actions for the character {{agentName}}.
-About {{agentName}}:
+            const messageHandlerTemplate = `# Character: {{agentName}}
 {{bio}}
-{{lore}}
 
-{{providers}}
-
-{{attachments}}
-
-# Capabilities
-Note that {{agentName}} is capable of reading/seeing/hearing various forms of media, including images, videos, audio, plaintext and PDFs. Recent attachments have been included above under the "Attachments" section.
-
-{{messageDirections}}
-
+# Conversation
 {{recentMessages}}
 
-{{actions}}
-
-# Instructions: Write the next message for {{agentName}}.`;
+# Instructions: Write the next message for {{agentName}}. Be helpful and concise. Respond in character.`;
 
             const context = composeContext({ state, template: messageHandlerTemplate });
 
+            const t3 = Date.now();
             const responseContent = await generateMessageResponse({
                 runtime,
                 context,
                 modelClass: ModelClass.SMALL
             });
+            Logger.info({ message: `[handleMessage] Text generated in ${Date.now() - t3}ms` });
 
-            if (!responseContent) {
-                return "Failed to generate a response. Please try again.";
+            if (!responseContent || !responseContent.text) {
+                Logger.warn({ message: `[handleMessage] No text in response: ${JSON.stringify(responseContent)}` });
+                return "I processed your request but couldn't formulate a response. Try again!";
             }
 
             const responseMemory: Memory = {
@@ -276,6 +269,8 @@ Note that {{agentName}} is capable of reading/seeing/hearing various forms of me
 
             await runtime.messageManager.createMemory(responseMemory);
             await runtime.processActions(message, [responseMemory], state);
+
+            Logger.info({ message: `[handleMessage] Total: ${Date.now() - t0}ms — Response: "${responseContent.text.substring(0, 80)}..."` });
 
             return responseContent.text;
         } catch (error) {

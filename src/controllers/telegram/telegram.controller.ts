@@ -217,15 +217,34 @@ export const handleText = async (ctx: MyContext) => {
       // Send typing indicator immediately so the user knows we're working
       await ctx.sendChatAction("typing");
 
-      // Process in the background — don't block the handler
-      agentService.handleMessage(user._id.toString(), ctx.from!.username || "", message)
-        .then(async (response) => {
-          await ctx.reply(response);
-        })
-        .catch(async (err) => {
-          Logger.error({ message: `NLP processing error: ${err}` });
-          await ctx.reply("Sorry, I took too long to think. Please try again.");
-        });
+      // Process in the background with full error handling
+      const userId = user._id.toString();
+      const username = ctx.from!.username || "";
+      const chatId = ctx.chat!.id;
+
+      (async () => {
+        try {
+          Logger.info({ message: `[NLP] Processing message from ${username}: "${message.substring(0, 50)}..."` });
+          const startTime = Date.now();
+
+          const response = await agentService.handleMessage(userId, username, message);
+
+          const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+          Logger.info({ message: `[NLP] Response generated in ${elapsed}s` });
+
+          if (response && response.trim().length > 0) {
+            await ctx.reply(response);
+          } else {
+            Logger.warn({ message: `[NLP] Empty response from agent, sending fallback.` });
+            await ctx.reply("I processed your message but didn't have a specific response. Try asking differently!");
+          }
+        } catch (err: any) {
+          Logger.error({ message: `[NLP] Error: ${err.message || err}` });
+          try {
+            await ctx.reply("Sorry, I encountered an error while thinking. Please try again.");
+          } catch (_) { /* ctx might be stale */ }
+        }
+      })();
       return;
     }
 
