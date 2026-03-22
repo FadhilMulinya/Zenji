@@ -93,7 +93,7 @@ class AgentService {
         // Deactivate all other agents for this user
         await Agent.updateMany({ user_id: userId as any }, { status: "inactive" });
 
-        let characterConfig = {};
+        let characterConfig;
         try {
             const ollama = createOllama({ baseURL: ENV.OLLAMA_API_URL || "http://localhost:11434/api" });
             const { object } = await generateObject({
@@ -109,11 +109,12 @@ class AgentService {
                     adjectives: z.array(z.string()),
                     topics: z.array(z.string()),
                 }),
-                prompt: `Create a rich character profile for an AI agent named "${name}".\nPersona description:\n"${persona}"\n\nGenerate bio, lore, style guidelines, adjectives, and topics reflecting this persona.`
+                prompt: `Create a rich character profile for an AI agent named "${name}".\nPersona description:\n"${persona}"\n\nGenerate bio, lore, style guidelines, adjectives, and topics reflecting this persona.\n\nIMPORTANT: Return ONLY a raw JSON object matching the exact schema. Do NOT wrap it in markdown backticks. Do NOT write \`\`\`json. Do NOT include any introductory or concluding text.`
             });
             characterConfig = object;
         } catch (err) {
             Logger.error({ message: `Error generating character traits using Ollama: ${err}` });
+            throw new Error("Failed to generate character metadata. Cannot create bot.");
         }
 
         const agentDoc = await Agent.create({
