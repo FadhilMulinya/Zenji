@@ -1,11 +1,11 @@
-import { 
+import {
     AgentRuntime,
-    Character, 
-    ModelProviderName, 
-    UUID, 
-    Memory, 
+    Character,
+    ModelProviderName,
+    UUID,
+    Memory,
     IAgentRuntime,
-    CacheManager, 
+    CacheManager,
     MemoryCacheAdapter,
     stringToUuid
 } from "@elizaos/core";
@@ -79,6 +79,57 @@ Fill in the values based on the persona. Return ONLY the JSON.`
         Logger.warn({ message: `AI character generation failed (${err}), using defaults.` });
         return null;
     }
+}
+
+// ── Rule-based intent parser ──
+// For clear action commands we can extract params directly without the LLM.
+// This prevents llama3.2:3b from hallucinating or looping on confirmations.
+
+interface ParsedAction {
+    action: "SEND_TOKEN" | "SWAP_TOKEN";
+    recipient?: string;
+    amount: number;
+    denom?: string;
+    fromToken?: string;
+    toToken?: string;
+}
+
+function parseIntentFromMessage(text: string): ParsedAction | null {
+    const normalized = text.trim();
+
+    // Match: "send 0.01 inj to inj1..."  OR  "send 0.01 usdt to inj1..."
+    const sendRegex = /\bsend\s+([\d.]+)\s+(inj|usdt)\s+to\s+(inj1[a-z0-9]{38,})/i;
+    const sendMatch = normalized.match(sendRegex);
+    if (sendMatch) {
+        const amount = parseFloat(sendMatch[1]);
+        if (!isNaN(amount) && amount > 0) {
+            return {
+                action: "SEND_TOKEN",
+                amount,
+                denom: sendMatch[2].toUpperCase(),
+                recipient: sendMatch[3],
+            };
+        }
+    }
+
+    // Match: "swap 1 usdt to inj"  OR  "swap 0.1 inj to usdt"
+    const swapRegex = /\bswap\s+([\d.]+)\s+(inj|usdt)\s+to\s+(inj|usdt)/i;
+    const swapMatch = normalized.match(swapRegex);
+    if (swapMatch) {
+        const amount = parseFloat(swapMatch[1]);
+        const from = swapMatch[2].toUpperCase();
+        const to = swapMatch[3].toUpperCase();
+        if (!isNaN(amount) && amount > 0 && from !== to) {
+            return {
+                action: "SWAP_TOKEN",
+                amount,
+                fromToken: from,
+                toToken: to,
+            };
+        }
+    }
+
+    return null;
 }
 
 // ── Agent Service ──
@@ -288,7 +339,8 @@ class AgentService {
                 .join("\n");
 
             // Detect if this is a balance/portfolio query and inject real data
-            const balanceKeywords = /balance|portfolio|how much|inj|usdt|token|asset|worth|wallet/i;
+            // NOTE: keep this regex narrow — avoid matching token names like 'inj'/'usdt' alone
+            const balanceKeywords = /\bbalance\b|\bportfolio\b|\bhow much\b|\bcheck\b|\bmy funds\b|\bmy assets\b|\bmy tokens\b/i;
             let walletContext = "";
             if (balanceKeywords.test(text)) {
                 Logger.info({ message: `[handleMessage] Balance query detected — fetching real on-chain data` });
@@ -309,21 +361,44 @@ class AgentService {
 
             // Fetch Eliza's state to get provider data (like wallet info)
             const elizaState = await runtime.composeState(userMemory);
-            const providerContext = elizaState.walletInfo || ""; 
+            const providerContext = elizaState.walletInfo || "";
 
             const prompt = `You are ${character.name}. ${bio}
 
-[RELEVANT CONTEXT]
-${providerContext}
-${walletContext}
+[REAL WALLET DATA - use ONLY these numbers, never invent balances]
+${walletContext || providerContext || "(no wallet data requested)"}
 
-[INSTRUCTIONS]
-- To send/transfer tokens, conclude your response ONLY when you have the actual recipient address and amount, with this exact JSON: \`\`\`json\n{"action":"SEND_TOKEN", "recipient":"actual_injective_address", "amount":1.5, "denom":"INJ"}\n\`\`\`
-- To swap tokens, conclude your response ONLY when you know the amount to swap, with this exact JSON: \`\`\`json\n{"action":"SWAP_TOKEN", "fromToken":"USDT", "toToken":"INJ", "amount":1.5}\n\`\`\`
-- IF you are missing information (like the recipient address or the amount), ASK the user for it. Do NOT output a JSON block with placeholders like "[address]" or "[number]".
-- Otherwise, just chat normally. Do NOT output JSON if you only want to chat.
+[RULES — follow exactly]
+1. When the user wants to SEND tokens and you have BOTH the recipient address AND the amount: output ONLY this JSON block and nothing else:
+\`\`\`json
+{"action":"SEND_TOKEN","recipient":"inj1...","amount":0.01,"denom":"INJ"}
+\`\`\`
+   - "denom" must be "INJ" or "USDT".
+   - If you do NOT have the recipient address yet, ask for it once. Never repeat the same question.
 
-Conversation:
+2. When the user wants to SWAP tokens and you have BOTH the fromToken AND the amount: output ONLY this JSON block and nothing else:
+\`\`\`json
+{"action":"SWAP_TOKEN","fromToken":"USDT","toToken":"INJ","amount":1}
+\`\`\`
+   - "amount" = the amount of fromToken the user wants to spend (e.g. if 'swap 1 usdt to inj', amount=1, fromToken=USDT).
+   - Do NOT ask for more confirmation once you have fromToken, toToken, and amount.
+
+3. NEVER output a JSON block with placeholder values like "[address]" or "X" — only real values.
+4. NEVER make up balances. If wallet data is shown above, use those exact numbers.
+5. For normal conversation, just reply in plain text. No JSON.
+
+[EXAMPLE]
+User: send 0.01 inj to inj1abc123
+${character.name}: \`\`\`json
+{"action":"SEND_TOKEN","recipient":"inj1abc123","amount":0.01,"denom":"INJ"}
+\`\`\`
+
+User: swap 2 usdt to inj
+${character.name}: \`\`\`json
+{"action":"SWAP_TOKEN","fromToken":"USDT","toToken":"INJ","amount":2}
+\`\`\`
+
+[CONVERSATION HISTORY]
 ${historyLines}
 ${telegramUserName || "User"}: ${text}
 ${character.name}:`;
@@ -346,18 +421,18 @@ ${character.name}:`;
             let finalReply = reply;
             const actionKeywords = ["SEND_TOKEN", "SWAP_TOKEN"];
             const detectedAction = actionKeywords.find(a => reply.includes(a));
-            
+
             // Try to match a JSON block (wrapped in markdown or raw object)
             let jsonMatch = reply.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
             if (!jsonMatch) {
                 jsonMatch = reply.match(/(\{[\s\S]*?"action"\s*:\s*"(?:SEND_TOKEN|SWAP_TOKEN)"[\s\S]*?\})/);
             }
-            
+
             // If the LLM returned a JSON block for an action, execute it via the custom wrapper
             if (jsonMatch && detectedAction) {
                 try {
                     const actionData = JSON.parse(jsonMatch[1]);
-                    
+
                     // STRICT VALIDATION
                     const amountRaw = Number(actionData.amount);
                     if (isNaN(amountRaw) || amountRaw <= 0) {
@@ -367,20 +442,20 @@ ${character.name}:`;
                         throw new Error("Invalid recipient address. Please provide a real injective address.");
                     }
                     actionData.amount = amountRaw; // Reassign the verified numeric value
-                        const wallet = await Wallet.findOne({ agent_id: agentDoc._id });
-                        if (!wallet) throw new Error("Agent wrapper wallet not configured yet.");
-                        
-                        const privateKey = decryptPrivateKey(wallet.encrypted_private_key);
-                        Logger.info({ message: `[handleMessage] Executing action ${actionData.action} directly via wrapper.` });
-                        
-                        let txHash = "";
-                        if (actionData.action === "SEND_TOKEN") {
-                            txHash = await InjectiveService.sendTokens(privateKey, actionData.recipient, actionData.amount, actionData.denom || "INJ");
-                            finalReply = `I have successfully sent ${actionData.amount} ${actionData.denom || "INJ"} to ${actionData.recipient}.\n\nTransaction Hash: ${txHash}`;
-                        } else if (actionData.action === "SWAP_TOKEN") {
-                            txHash = await InjectiveService.swapTokens(privateKey, actionData.fromToken, actionData.toToken, actionData.amount);
-                            finalReply = `I have successfully swapped ${actionData.amount} ${actionData.fromToken} on the Spot Market.\n\nTransaction Hash: ${txHash}`;
-                        }
+                    const wallet = await Wallet.findOne({ agent_id: agentDoc._id });
+                    if (!wallet) throw new Error("Agent wrapper wallet not configured yet.");
+
+                    const privateKey = decryptPrivateKey(wallet.encrypted_private_key);
+                    Logger.info({ message: `[handleMessage] Executing action ${actionData.action} directly via wrapper.` });
+
+                    let txHash = "";
+                    if (actionData.action === "SEND_TOKEN") {
+                        txHash = await InjectiveService.sendTokens(privateKey, actionData.recipient, actionData.amount, actionData.denom || "INJ");
+                        finalReply = `I have successfully sent ${actionData.amount} ${actionData.denom || "INJ"} to ${actionData.recipient}.\n\nTransaction Hash: ${txHash}`;
+                    } else if (actionData.action === "SWAP_TOKEN") {
+                        txHash = await InjectiveService.swapTokens(privateKey, actionData.fromToken, actionData.toToken, actionData.amount);
+                        finalReply = `I have successfully swapped ${actionData.amount} ${actionData.fromToken} on the Spot Market.\n\nTransaction Hash: ${txHash}`;
+                    }
                 } catch (err: any) {
                     Logger.error({ message: `[handleMessage] Custom wrapper action failed: ${err.message}` });
                     finalReply = `I tried to process your transaction but an error occurred: ${err.message}`;
@@ -393,10 +468,10 @@ ${character.name}:`;
                 userId: runtime.agentId,
                 agentId: runtime.agentId,
                 roomId: agentDoc.room_id as UUID,
-                content: { 
-                    text: finalReply, 
+                content: {
+                    text: finalReply,
                     source: "telegram",
-                    action: detectedAction || undefined 
+                    action: detectedAction || undefined
                 },
                 createdAt: Date.now() + 1,
             };

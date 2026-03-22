@@ -1,13 +1,26 @@
-import { 
-  ChainGrpcBankApi, 
-  MsgSend, 
-  MsgBroadcasterWithPk, 
+import {
+  ChainGrpcBankApi,
+  MsgSend,
+  MsgBroadcasterWithPk,
   PrivateKey,
   MsgCreateSpotMarketOrder,
   spotPriceToChainPriceToFixed,
   spotQuantityToChainQuantityToFixed
 } from "@injectivelabs/sdk-ts";
 import { Network, getNetworkEndpoints } from "@injectivelabs/networks";
+import * as bech32Lib from "bech32";
+
+/**
+ * Derive the correct Injective default subaccount ID (index 0).
+ * Format: ethereum_hex_without_0x (40 chars) + 24 zero chars = 64 hex chars total.
+ * The bech32 address encodes the same 20-byte pubkey hash as the Ethereum address.
+ */
+function getDefaultSubaccountId(injectiveBech32: string): string {
+  const { words } = bech32Lib.decode(injectiveBech32);
+  const bytes = bech32Lib.fromWords(words); // 20-byte address
+  const hexAddr = Buffer.from(bytes).toString("hex").toLowerCase().padStart(40, "0");
+  return hexAddr + "000000000000000000000000"; // 40 + 24 = 64 hex chars (32 bytes)
+}
 
 const network = process.env.INJECTIVE_NETWORK?.toLowerCase() === "mainnet"
   ? Network.MainnetK8s
@@ -29,20 +42,20 @@ const DENOM_LABELS: Record<string, string> = {
 };
 
 export class InjectiveService {
-  
+
   static async getBalancesFormatted(address: string): Promise<string> {
     const response = await chainGrpcBankApi.fetchBalances(address);
     const balances = response.balances;
 
     if (!balances || balances.length === 0) {
-        return "No balances found on-chain.";
+      return "No balances found on-chain.";
     }
 
     return balances.map(bal => {
-        const decimals = DENOM_DECIMALS[bal.denom] ?? 18;
-        const amount = (parseFloat(bal.amount) / Math.pow(10, decimals)).toFixed(4);
-        const label = DENOM_LABELS[bal.denom] || bal.denom;
-        return `  ${label}: ${amount}`;
+      const decimals = DENOM_DECIMALS[bal.denom] ?? 18;
+      const amount = (parseFloat(bal.amount) / Math.pow(10, decimals)).toFixed(4);
+      const label = DENOM_LABELS[bal.denom] || bal.denom;
+      return `  ${label}: ${amount}`;
     }).join("\n");
   }
 
@@ -51,12 +64,12 @@ export class InjectiveService {
     const srcInjectiveAddress = privateKey.toBech32();
 
     const isUSDT = denomLabel.toUpperCase() === "USDT";
-    const denom = isUSDT 
-        ? (network === Network.Testnet ? "peggy0x87aB3B4C8661e07D6372361211B96ed4Dc36B1B5" : "peggy0xdAC17F958D2ee523a2206206994597C13D831ec7")
-        : "inj";
+    const denom = isUSDT
+      ? (network === Network.Testnet ? "peggy0x87aB3B4C8661e07D6372361211B96ed4Dc36B1B5" : "peggy0xdAC17F958D2ee523a2206206994597C13D831ec7")
+      : "inj";
     const decimals = isUSDT ? 6 : 18;
 
-    const amountChain = (amountNum * Math.pow(10, decimals)).toLocaleString('fullwide', {useGrouping:false});
+    const amountChain = (amountNum * Math.pow(10, decimals)).toLocaleString('fullwide', { useGrouping: false });
 
     const msg = MsgSend.fromJSON({
       amount: { denom, amount: amountChain },
@@ -70,7 +83,7 @@ export class InjectiveService {
     return response.txHash;
   }
 
-  static async swapTokens(privateKeyHex: string, fromToken: string, toToken: string, quantityOfInj: number) {
+  static async swapTokens(privateKeyHex: string, fromToken: string, toToken: string, amount: number) {
     const privateKey = PrivateKey.fromPrivateKey(privateKeyHex);
     const injectiveAddress = privateKey.toBech32();
 
@@ -78,37 +91,51 @@ export class InjectiveService {
     const isSell = fromToken.toUpperCase() === "INJ" && toToken.toUpperCase() === "USDT";
 
     if (!isBuy && !isSell) {
-        throw new Error("Only INJ/USDT swaps are supported by this simplified action.");
+      throw new Error("Only INJ/USDT swaps are supported by this simplified action.");
     }
 
     // Spot Market ID for INJ/USDT
-    const marketId = network === Network.Testnet 
-        ? "0x0611780ba69656949525013d947713300f56c37b6175e02f26bffa495c3208fe" 
-        : "0xa508cb329233ce71527f1c4e90d1870e4702bba689f9296ddce50284ab9fb8b1"; // Mainnet ID
+    const marketId = network === Network.Testnet
+      ? "0x0611780ba69656949525013d947713300f56c37b6175e02f26bffa495c3208fe"
+      : "0xa508cb329233ce71527f1c4e90d1870e4702bba689f9296ddce50284ab9fb8b1";
 
     const market = {
-        marketId,
-        baseDecimals: 18,
-        quoteDecimals: 6
+      marketId,
+      baseDecimals: 18,
+      quoteDecimals: 6
     };
 
-    // To guarantee market order fill, we use a slippage-tolerant price
-    // Buy INJ: specify a high max price (e.g. 100 USDT)
-    // Sell INJ: specify a low min price (e.g. 0.1 USDT)
-    const price = isBuy ? 100 : 0.001; 
+    // For a market BUY order (USDT → INJ):
+    //   `amount` is the USDT the user wants to spend.
+    //   The spot market needs a quantity in terms of the BASE asset (INJ).
+    //   We use a conservative estimated price to derive INJ quantity:
+    //   injQty = usdtAmount / estimatedPricePerInj
+    //
+    // For a market SELL order (INJ → USDT):
+    //   `amount` is already the INJ to sell — use it directly.
+    //
+    // The order `price` is a cap/floor to guarantee fill:
+    //   Buy cap  = 100 USDT/INJ  (will fill at whatever market price, up to 100)
+    //   Sell floor = 0.001 USDT/INJ (will fill at whatever market price, above 0.001)
 
-    // quantityOfInj is ALWAYS the amount of INJ to buy or sell (base asset)
+    const ESTIMATED_INJ_PRICE_USDT = 25; // conservative estimate; replace with live feed in future
+    const injQuantity = isBuy
+      ? amount / ESTIMATED_INJ_PRICE_USDT  // convert USDT spend → INJ quantity
+      : amount;                             // already in INJ
+
+    const worseCasePrice = isBuy ? 100 : 0.001;
+
     const msg = MsgCreateSpotMarketOrder.fromJSON({
-      subaccountId: injectiveAddress + "000000000000000000000000",
+      subaccountId: getDefaultSubaccountId(injectiveAddress),
       injectiveAddress,
-      orderType: isBuy ? 1 : 2, // 1 is buy, 2 is sell
+      orderType: isBuy ? 1 : 2, // 1 = buy, 2 = sell
       price: spotPriceToChainPriceToFixed({
-        value: price,
+        value: worseCasePrice,
         baseDecimals: market.baseDecimals,
         quoteDecimals: market.quoteDecimals,
       }),
       quantity: spotQuantityToChainQuantityToFixed({
-        value: quantityOfInj,
+        value: injQuantity,
         baseDecimals: market.baseDecimals,
       }),
       marketId: market.marketId,
