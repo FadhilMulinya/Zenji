@@ -24,6 +24,16 @@ export const ENV = {
   RESEND_KEY: process.env.RESEND_KEY as string,
 };
 
+// ── Inject Ollama settings into process.env for iagent core ──
+// The iagent core reads these directly from process.env, not from our ENV object.
+process.env.USE_OLLAMA_EMBEDDING = "true";
+process.env.OLLAMA_SERVER_URL = ENV.OLLAMA_API_URL?.replace("/api", "") || "http://localhost:11434";
+process.env.OLLAMA_EMBEDDING_MODEL = process.env.OLLAMA_EMBEDDING_MODEL || "nomic-embed-text";
+process.env.OLLAMA_MODEL = process.env.OLLAMA_MODEL || "llama3.2:3b";
+process.env.SMALL_OLLAMA_MODEL = process.env.SMALL_OLLAMA_MODEL || "llama3.2:3b";
+process.env.MEDIUM_OLLAMA_MODEL = process.env.MEDIUM_OLLAMA_MODEL || "llama3.2:3b";
+process.env.LARGE_OLLAMA_MODEL = process.env.LARGE_OLLAMA_MODEL || "llama3.2:3b";
+
 export const isProduction = process.env.NODE_ENV === "production";
 
 const REQUIRED_ENV = [
