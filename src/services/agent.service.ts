@@ -5,12 +5,8 @@ import {
     UUID, 
     Memory, 
     IAgentRuntime,
-    State,
     CacheManager, 
     MemoryCacheAdapter,
-    ModelClass,
-    composeContext,
-    generateMessageResponse,
     stringToUuid
 } from "@elizaos/core";
 import { generateText as aiSdkGenerateText } from "ai";
@@ -205,6 +201,9 @@ class AgentService {
     }
 
     // ── NLP Message handling ──
+    // NOTE: We bypass Eliza's generateMessageResponse() because it has a
+    // while(true) loop that retries forever when the model returns plain text
+    // instead of JSON. For llama3.2:3b we use direct Ollama calls instead.
 
     public async handleMessage(userId: string, telegramUserName: string, text: string): Promise<string> {
         try {
@@ -217,8 +216,58 @@ class AgentService {
             Logger.info({ message: `[handleMessage] Runtime loaded in ${Date.now() - t0}ms` });
 
             const agentDoc = await Agent.findOne({ user_id: userId, status: "active" });
+            const character = runtime.character;
 
-            const message: Memory = {
+            // Fetch recent conversation history from memory
+            const t1 = Date.now();
+            const recentMemories = await runtime.messageManager.getMemories({
+                roomId: agentDoc!.room_id as UUID,
+                count: 8,
+            });
+            Logger.info({ message: `[handleMessage] Memory fetched in ${Date.now() - t1}ms` });
+
+            // Build a simple conversation history string
+            const historyLines = recentMemories
+                .reverse()
+                .map(m => {
+                    const isAgent = m.agentId === runtime.agentId && m.userId === runtime.agentId;
+                    const speaker = isAgent ? (character.name || "Agent") : (telegramUserName || "User");
+                    return `${speaker}: ${m.content?.text || ""}`;
+                })
+                .join("\n");
+
+            // Direct Ollama call — one shot, plain text, no JSON parse loop
+            const ollama = createOllama({
+                baseURL: ENV.OLLAMA_API_URL || "http://localhost:11434/api"
+            });
+
+            const bio = Array.isArray(character.bio)
+                ? character.bio.slice(0, 2).join(" ")
+                : (character.bio || "");
+
+            const prompt = `You are ${character.name}. ${bio}
+
+Conversation:
+${historyLines}
+${telegramUserName || "User"}: ${text}
+${character.name}:`;
+
+            const t3 = Date.now();
+            const { text: responseText } = await aiSdkGenerateText({
+                model: ollama("llama3.2:3b"),
+                prompt,
+                maxTokens: 256,
+            });
+            Logger.info({ message: `[handleMessage] Text generated in ${Date.now() - t3}ms` });
+
+            const reply = responseText?.trim();
+            if (!reply) {
+                Logger.warn({ message: `[handleMessage] Empty response from Ollama` });
+                return "I processed your message but had nothing to say. Try again!";
+            }
+
+            // Store user message + agent reply in memory for future context
+            const userMemory: Memory = {
                 id: stringToUuid(Date.now().toString()),
                 userId: stringToUuid(userId),
                 agentId: runtime.agentId,
@@ -226,53 +275,20 @@ class AgentService {
                 content: { text, source: "telegram" },
                 createdAt: Date.now(),
             };
-
-            const t1 = Date.now();
-            await runtime.messageManager.createMemory(message);
-            Logger.info({ message: `[handleMessage] Memory created in ${Date.now() - t1}ms` });
-
-            const t2 = Date.now();
-            const state = await runtime.composeState(message);
-            Logger.info({ message: `[handleMessage] State composed in ${Date.now() - t2}ms` });
-
-            const messageHandlerTemplate = `# Character: {{agentName}}
-{{bio}}
-
-# Conversation
-{{recentMessages}}
-
-# Instructions: Write the next message for {{agentName}}. Be helpful and concise. Respond in character.`;
-
-            const context = composeContext({ state, template: messageHandlerTemplate });
-
-            const t3 = Date.now();
-            const responseContent = await generateMessageResponse({
-                runtime,
-                context,
-                modelClass: ModelClass.SMALL
-            });
-            Logger.info({ message: `[handleMessage] Text generated in ${Date.now() - t3}ms` });
-
-            if (!responseContent || !responseContent.text) {
-                Logger.warn({ message: `[handleMessage] No text in response: ${JSON.stringify(responseContent)}` });
-                return "I processed your request but couldn't formulate a response. Try again!";
-            }
-
-            const responseMemory: Memory = {
+            const agentMemory: Memory = {
                 id: stringToUuid(uuidv4()),
                 userId: runtime.agentId,
                 agentId: runtime.agentId,
-                roomId: message.roomId,
-                content: responseContent,
-                createdAt: Date.now(),
+                roomId: agentDoc!.room_id as UUID,
+                content: { text: reply, source: "telegram" },
+                createdAt: Date.now() + 1,
             };
+            await runtime.messageManager.createMemory(userMemory);
+            await runtime.messageManager.createMemory(agentMemory);
 
-            await runtime.messageManager.createMemory(responseMemory);
-            await runtime.processActions(message, [responseMemory], state);
+            Logger.info({ message: `[handleMessage] Total: ${Date.now() - t0}ms — "${reply.substring(0, 80)}"` });
+            return reply;
 
-            Logger.info({ message: `[handleMessage] Total: ${Date.now() - t0}ms — Response: "${responseContent.text.substring(0, 80)}..."` });
-
-            return responseContent.text;
         } catch (error) {
             Logger.error({ message: `Error in AgentService.handleMessage: ${error}` });
             return "Sorry, I encountered an error while processing your request.";
