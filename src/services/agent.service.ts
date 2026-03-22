@@ -21,6 +21,7 @@ import { ENV } from "../lib/environments.ts";
 import { Logger } from "borgen";
 import { decryptPrivateKey } from "./crypto.service.ts";
 import { createWalletForAgent } from "./wallet.service.ts";
+import { InjectiveService } from "./injective.service.ts";
 
 // ── Character generation helpers ──
 
@@ -218,11 +219,12 @@ class AgentService {
 
             const DENOM_DECIMALS: Record<string, number> = {
                 inj: 18,
-                // peggy USDT
-                "peggy0xdAC17F958D2ee523a2206206994597C13D831ec7": 6,
+                "peggy0x87aB3B4C8661e07D6372361211B96ed4Dc36B1B5": 6, // USDT Testnet Peggy
+                "peggy0xdAC17F958D2ee523a2206206994597C13D831ec7": 6, // USDT Mainnet Peggy
             };
             const DENOM_LABELS: Record<string, string> = {
                 inj: "INJ",
+                "peggy0x87aB3B4C8661e07D6372361211B96ed4Dc36B1B5": "USDT",
                 "peggy0xdAC17F958D2ee523a2206206994597C13D831ec7": "USDT",
             };
 
@@ -316,9 +318,9 @@ ${providerContext}
 ${walletContext}
 
 [INSTRUCTIONS]
-- To send/transfer tokens, conclude your response with: "SEND_TOKEN"
-- To swap tokens, conclude your response with: "SWAP_TOKEN"
-- Otherwise, just chat normally.
+- To send/transfer tokens, conclude your response with a JSON block: \`\`\`json\n{"action":"SEND_TOKEN", "recipient":"[address]", "amount":[number], "denom":"[INJ or USDT]"}\n\`\`\`
+- To swap tokens, conclude your response with a JSON block: \`\`\`json\n{"action":"SWAP_TOKEN", "fromToken":"[INJ or USDT]", "toToken":"[INJ or USDT]", "amount":[number in INJ]}\n\`\`\`
+- Otherwise, just chat normally. Do NOT output JSON if you only want to chat.
 
 Conversation:
 ${historyLines}
@@ -339,9 +341,37 @@ ${character.name}:`;
                 return "I processed your message but had nothing to say. Try again!";
             }
 
-            // Detect if an action is needed based on the response
-            const actionKeywords = ["SEND_TOKEN", "SWAP_TOKEN", "EXECUTE_ACTION"];
+            // Clean up the reply and detect JSON action matching
+            let finalReply = reply;
+            const actionKeywords = ["SEND_TOKEN", "SWAP_TOKEN"];
             const detectedAction = actionKeywords.find(a => reply.includes(a));
+            
+            // If the LLM returned a JSON block for an action, execute it via the custom wrapper
+            if (reply.includes("```json") && detectedAction) {
+                try {
+                    const jsonMatch = reply.match(/```json\s*(\{[\s\S]*?\})\s*```/);
+                    if (jsonMatch) {
+                        const actionData = JSON.parse(jsonMatch[1]);
+                        const wallet = await Wallet.findOne({ agent_id: agentDoc._id });
+                        if (!wallet) throw new Error("Agent wrapper wallet not configured yet.");
+                        
+                        const privateKey = decryptPrivateKey(wallet.encrypted_private_key);
+                        Logger.info({ message: `[handleMessage] Executing action ${actionData.action} directly via wrapper.` });
+                        
+                        let txHash = "";
+                        if (actionData.action === "SEND_TOKEN") {
+                            txHash = await InjectiveService.sendTokens(privateKey, actionData.recipient, actionData.amount, actionData.denom || "INJ");
+                            finalReply = `I have successfully sent ${actionData.amount} ${actionData.denom || "INJ"} to ${actionData.recipient}.\n\nTransaction Hash: ${txHash}`;
+                        } else if (actionData.action === "SWAP_TOKEN") {
+                            txHash = await InjectiveService.swapTokens(privateKey, actionData.fromToken, actionData.toToken, actionData.amount);
+                            finalReply = `I have successfully swapped ${actionData.amount} ${actionData.fromToken} on the Spot Market.\n\nTransaction Hash: ${txHash}`;
+                        }
+                    }
+                } catch (err: any) {
+                    Logger.error({ message: `[handleMessage] Custom wrapper action failed: ${err.message}` });
+                    finalReply = `I tried to process your transaction but an error occurred: ${err.message}`;
+                }
+            }
 
             // Store user message + agent reply in memory for future context
             const agentMemory: Memory = {
@@ -350,7 +380,7 @@ ${character.name}:`;
                 agentId: runtime.agentId,
                 roomId: agentDoc.room_id as UUID,
                 content: { 
-                    text: reply, 
+                    text: finalReply, 
                     source: "telegram",
                     action: detectedAction || undefined 
                 },
@@ -359,16 +389,8 @@ ${character.name}:`;
             await runtime.messageManager.createMemory(userMemory);
             await runtime.messageManager.createMemory(agentMemory);
 
-            // Trigger Eliza's state-based action processing if an action is detected or implied
-            if (detectedAction || /send|transfer|swap|trade|buy|sell/i.test(text)) {
-                Logger.info({ message: `[handleMessage] Triggering action processing for: ${detectedAction || "IMPLIED ACTION"}` });
-                // We re-compose state to make sure actions have latest data
-                const state = await runtime.composeState(userMemory);
-                await runtime.processActions(userMemory, [agentMemory], state);
-            }
-
-            Logger.info({ message: `[handleMessage] Total: ${Date.now() - t0}ms — "${reply.substring(0, 80)}"` });
-            return reply;
+            Logger.info({ message: `[handleMessage] Total: ${Date.now() - t0}ms — "${finalReply.substring(0, 80)}"` });
+            return finalReply;
 
         } catch (error) {
             Logger.error({ message: `Error in AgentService.handleMessage: ${error}` });
