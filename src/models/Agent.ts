@@ -11,6 +11,7 @@ export interface IAgent extends Document {
   room_id: UUID;
   created_at: Date;
   updated_at: Date;
+  character_config?: any; // Stores the generated Eliza character JSON
 }
 
 const AgentSchema: Schema = new Schema(
@@ -26,6 +27,7 @@ const AgentSchema: Schema = new Schema(
     },
     agent_id: { type: String, required: true },
     room_id: { type: String, required: true },
+    character_config: { type: Schema.Types.Mixed, required: false },
   },
   { timestamps: { createdAt: "created_at", updatedAt: "updated_at" } }
 );

@@ -8,8 +8,14 @@ import {
     State,
     CacheManager, 
     MemoryCacheAdapter,
+    ModelClass,
+    composeContext,
+    generateMessageResponse,
     stringToUuid
 } from "@elizaos/core";
+import { generateObject } from "ai";
+import { createOpenAI } from "@ai-sdk/openai";
+import { z } from "zod";
 import { injectivePlugin } from "@elizaos/plugin-injective";
 import { v4 as uuidv4 } from "uuid";
 import { MongoDBAdapter } from "./mongo-adapter.ts";
@@ -62,6 +68,7 @@ class AgentService {
                 name: agentDoc.name || "Zenji",
                 id: agentDoc.agent_id as UUID,
                 system: agentDoc.persona || zenjiCharacter.system, // Inject optional custom persona
+                ...(agentDoc.character_config || {}),
                 settings: {
                     ...zenjiCharacter.settings,
                     secrets: {
@@ -86,6 +93,31 @@ class AgentService {
         // Deactivate all other agents for this user
         await Agent.updateMany({ user_id: userId as any }, { status: "inactive" });
 
+        let characterConfig = {};
+        if (ENV.OPENAI_API_KEY) {
+            try {
+                const openai = createOpenAI({ apiKey: ENV.OPENAI_API_KEY });
+                const { object } = await generateObject({
+                    model: openai("gpt-4o-mini"),
+                    schema: z.object({
+                        bio: z.array(z.string()),
+                        lore: z.array(z.string()),
+                        style: z.object({
+                            all: z.array(z.string()),
+                            chat: z.array(z.string()),
+                            post: z.array(z.string()),
+                        }),
+                        adjectives: z.array(z.string()),
+                        topics: z.array(z.string()),
+                    }),
+                    prompt: `Create a rich character profile for an AI agent named "${name}".\nPersona description:\n"${persona}"\n\nGenerate bio, lore, style guidelines, adjectives, and topics reflecting this persona.`
+                });
+                characterConfig = object;
+            } catch (err) {
+                Logger.error({ message: `Error generating character traits: ${err}` });
+            }
+        }
+
         const agentDoc = await Agent.create({
             user_id: userId as any,
             name,
@@ -94,6 +126,7 @@ class AgentService {
             status: "active",
             agent_id: stringToUuid(uuidv4()),
             room_id: stringToUuid(uuidv4()),
+            character_config: characterConfig
         });
 
         return agentDoc;
@@ -117,15 +150,61 @@ class AgentService {
                 createdAt: Date.now(),
             };
 
-            // Process message
-            // Note: In a real Eliza setup, this involves evaluators and actions
-            // For now, we use a simplified call to the runtime
+            await runtime.messageManager.createMemory(message);
+
             const state = await runtime.composeState(message);
-            await runtime.processActions(message, [], state);
+
+            const messageHandlerTemplate = `# Action Examples
+{{actionExamples}}
+
+# Knowledge
+{{knowledge}}
+
+# Task: Generate dialog and actions for the character {{agentName}}.
+About {{agentName}}:
+{{bio}}
+{{lore}}
+
+{{providers}}
+
+{{attachments}}
+
+# Capabilities
+Note that {{agentName}} is capable of reading/seeing/hearing various forms of media, including images, videos, audio, plaintext and PDFs. Recent attachments have been included above under the "Attachments" section.
+
+{{messageDirections}}
+
+{{recentMessages}}
+
+{{actions}}
+
+# Instructions: Write the next message for {{agentName}}.`;
+
+            const context = composeContext({ state, template: messageHandlerTemplate });
             
-            // This is a placeholder. Real implementation needs to handle 
-            // the AI response generation and action execution callbacks.
-            return `Agent processed your request. (Integration in progress!)`;
+            const responseContent = await generateMessageResponse({
+                runtime,
+                context,
+                modelClass: ModelClass.SMALL
+            });
+
+            if (!responseContent) {
+                return "Failed to generate a response. Please try again.";
+            }
+
+            const responseMemory: Memory = {
+                id: stringToUuid(uuidv4()),
+                userId: runtime.agentId,
+                agentId: runtime.agentId,
+                roomId: message.roomId,
+                content: responseContent,
+                createdAt: Date.now(),
+            };
+
+            await runtime.messageManager.createMemory(responseMemory);
+            await runtime.processActions(message, [responseMemory], state);
+            
+            return responseContent.text;
         } catch (error) {
             Logger.error({ message: `Error in AgentService.handleMessage: ${error}` });
             return "Sorry, I encountered an error while processing your request.";
