@@ -2,7 +2,7 @@ import mongoose, { Schema, Document } from "mongoose";
 import { UUID } from "@elizaos/core";
 
 export interface IAgent extends Document {
-  user_id: mongoose.Types.ObjectId;
+  user_id: string;
   name: string;
   character_name: string;
   persona: string;
@@ -16,7 +16,7 @@ export interface IAgent extends Document {
 
 const AgentSchema: Schema = new Schema(
   {
-    user_id: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    user_id: { type: String, required: true },
     name: { type: String, required: true },
     character_name: { type: String, required: true, default: "Zenji" },
     persona: { type: String, required: false },

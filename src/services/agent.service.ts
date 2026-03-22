@@ -99,16 +99,16 @@ class AgentService {
     // ── Query helpers ──
 
     public async getAgentsForUser(userId: string) {
-        return Agent.find({ user_id: userId as any });
+        return Agent.find({ user_id: userId });
     }
 
     public async getActiveAgent(userId: string) {
-        return Agent.findOne({ user_id: userId as any, status: "active" });
+        return Agent.findOne({ user_id: userId, status: "active" });
     }
 
     public async selectAgent(userId: string, agentMongoId: string) {
         // Deactivate all agents for this user
-        await Agent.updateMany({ user_id: userId as any }, { status: "inactive" });
+        await Agent.updateMany({ user_id: userId }, { status: "inactive" });
         // Activate the selected one
         const agent = await Agent.findByIdAndUpdate(agentMongoId, { status: "active" }, { new: true });
         // Evict old runtime caches
@@ -122,7 +122,7 @@ class AgentService {
     // ── Runtime ──
 
     public async getActiveRuntime(userId: string): Promise<IAgentRuntime | null> {
-        const agentDoc = await Agent.findOne({ user_id: userId as any, status: "active" });
+        const agentDoc = await Agent.findOne({ user_id: userId, status: "active" });
         if (!agentDoc) return null;
 
         const agentIdStr = (agentDoc.agent_id as UUID).toString();
@@ -176,7 +176,7 @@ class AgentService {
 
     public async createNewAgent(userId: string, name: string, persona: string): Promise<any> {
         // Deactivate all other agents for this user
-        await Agent.updateMany({ user_id: userId as any }, { status: "inactive" });
+        await Agent.updateMany({ user_id: userId }, { status: "inactive" });
 
         // 1. Generate AI traits (may fall back to defaults)
         const aiTraits = await generateCharacterTraits(name, persona);
@@ -186,7 +186,7 @@ class AgentService {
 
         // 3. Store agent + full character in DB
         const agentDoc = await Agent.create({
-            user_id: userId as any,
+            user_id: userId,
             name,
             persona,
             character_name: name,
@@ -213,7 +213,7 @@ class AgentService {
                 return "You don't have an active agent. Please use /createagent to launch one!";
             }
 
-            const agentDoc = await Agent.findOne({ user_id: userId as any, status: "active" });
+            const agentDoc = await Agent.findOne({ user_id: userId, status: "active" });
 
             const message: Memory = {
                 id: stringToUuid(Date.now().toString()),

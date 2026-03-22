@@ -26,7 +26,8 @@ export const handleStart = async (ctx: MyContext) => {
       await ctx.reply(
         `Welcome back, ${first_name}! 🚀\n\n` +
         `Active Agent: <b>${activeAgent.name}</b>\n` +
-        (wallet ? `Wallet: <code>${wallet.injective_address}</code>\n\n` : "\n") +
+        (wallet ? `Injective: <code>${wallet.injective_address}</code>\n` +
+        `EVM: <code>${wallet.ethereum_address}</code>\n\n` : "\n") +
         `Use /myagents to manage agents, /account to check balance, or just chat!`,
         { parse_mode: "HTML" }
       );
@@ -66,7 +67,8 @@ export const handleAccount = async (ctx: MyContext) => {
     const balances = await getBalances(wallet.injective_address);
 
     let balanceMsg = `💰 <b>${activeAgent.name}'s Wallet</b>\n`;
-    balanceMsg += `Address: <code>${wallet.injective_address}</code>\n\n`;
+    balanceMsg += `Injective: <code>${wallet.injective_address}</code>\n`;
+    balanceMsg += `EVM: <code>${wallet.ethereum_address}</code>\n\n`;
 
     if (!balances || balances.length === 0) {
       balanceMsg += "No assets found.";
@@ -234,7 +236,8 @@ export const handleText = async (ctx: MyContext) => {
         await ctx.reply(
           `✅ Agent <b>${name}</b> created and activated!\n\n` +
           `Persona: ${persona}\n` +
-          `Wallet: <code>${wallet.injective_address}</code>\n\n` +
+          `Injective: <code>${wallet.injective_address}</code>\n` +
+          `EVM: <code>${wallet.ethereum_address}</code>\n\n` +
           `You can now chat with them directly!`,
           { parse_mode: "HTML" }
         );
