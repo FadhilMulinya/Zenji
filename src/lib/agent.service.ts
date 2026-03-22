@@ -14,7 +14,7 @@ import {
     stringToUuid
 } from "@elizaos/core";
 import { generateObject } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
+import { createOllama } from "ollama-ai-provider";
 import { z } from "zod";
 import { injectivePlugin } from "@elizaos/plugin-injective";
 import { v4 as uuidv4 } from "uuid";
@@ -61,8 +61,8 @@ class AgentService {
             agentId: agentDoc.agent_id as UUID,
             databaseAdapter: this.adapter,
             cacheManager: this.cache,
-            token: ENV.OPENAI_API_KEY || "", 
-            modelProvider: ModelProviderName.OPENAI,
+            token: "", 
+            modelProvider: ModelProviderName.OLLAMA,
             character: {
                 ...zenjiCharacter,
                 name: agentDoc.name || "Zenji",
@@ -94,28 +94,26 @@ class AgentService {
         await Agent.updateMany({ user_id: userId as any }, { status: "inactive" });
 
         let characterConfig = {};
-        if (ENV.OPENAI_API_KEY) {
-            try {
-                const openai = createOpenAI({ apiKey: ENV.OPENAI_API_KEY });
-                const { object } = await generateObject({
-                    model: openai("gpt-4o-mini"),
-                    schema: z.object({
-                        bio: z.array(z.string()),
-                        lore: z.array(z.string()),
-                        style: z.object({
-                            all: z.array(z.string()),
-                            chat: z.array(z.string()),
-                            post: z.array(z.string()),
-                        }),
-                        adjectives: z.array(z.string()),
-                        topics: z.array(z.string()),
+        try {
+            const ollama = createOllama({ baseURL: ENV.OLLAMA_API_URL || "http://localhost:11434/api" });
+            const { object } = await generateObject({
+                model: ollama("llama3.2:3b"),
+                schema: z.object({
+                    bio: z.array(z.string()),
+                    lore: z.array(z.string()),
+                    style: z.object({
+                        all: z.array(z.string()),
+                        chat: z.array(z.string()),
+                        post: z.array(z.string()),
                     }),
-                    prompt: `Create a rich character profile for an AI agent named "${name}".\nPersona description:\n"${persona}"\n\nGenerate bio, lore, style guidelines, adjectives, and topics reflecting this persona.`
-                });
-                characterConfig = object;
-            } catch (err) {
-                Logger.error({ message: `Error generating character traits: ${err}` });
-            }
+                    adjectives: z.array(z.string()),
+                    topics: z.array(z.string()),
+                }),
+                prompt: `Create a rich character profile for an AI agent named "${name}".\nPersona description:\n"${persona}"\n\nGenerate bio, lore, style guidelines, adjectives, and topics reflecting this persona.`
+            });
+            characterConfig = object;
+        } catch (err) {
+            Logger.error({ message: `Error generating character traits using Ollama: ${err}` });
         }
 
         const agentDoc = await Agent.create({

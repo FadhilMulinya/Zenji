@@ -24,6 +24,23 @@ On first contact, Zenji creates a dedicated Injective wallet for the user and th
 
 ---
 
+## How to run the application
+```
+clone the repo  git@github.com:FadhilMulinya/Zenji.git
+```
+
+```
+npm install
+```
+
+```
+cp .env.example .env
+```
+
+```
+make sure you have an api key if not run a local model
+```
+
 ## 🧠 Architecture Overview
 
 **Core pieces:**
