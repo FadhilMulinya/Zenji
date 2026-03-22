@@ -1627,6 +1627,15 @@ Text: ${attachment.text}
         } as State;
 
         const actionPromises = this.actions.map(async (action: Action) => {
+            if (!action || typeof action.validate !== "function") {
+                console.error(`[CRITICAL] Malformed action detected in runtime.actions:`, {
+                    name: (action as any)?.name || "Unknown",
+                    type: typeof action,
+                    hasValidate: !!(action as any)?.validate,
+                    validateType: typeof (action as any)?.validate
+                });
+                return null;
+            }
             const result = await action.validate(this, message, initialState);
             if (result) {
                 return action;
