@@ -1,14 +1,19 @@
 import "dotenv/config";
 
 export const ENV = {
+  WHATSAPP_API_BASE_URL: process.env.WHATSAPP_API_BASE_URL as string,
+  USER_ACCESS_TOKEN: process.env.USER_ACCESS_TOKEN as string,
+  PHONE_NUMBER_ID: process.env.PHONE_NUMBER_ID as string,
+  WHATSAPP_BUSINESS_ACCOUNT_ID: process.env.WHATSAPP_BUSINESS_ACCOUNT_ID as string,
+  WHATSAPP_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN || "zenji_token",
   SERVER_PORT: process.env.SERVER_PORT || 8001,
   MONGO_URI: process.env.MONGO_URI as string,
   BOT_TOKEN: process.env.BOT_TOKEN as string,
   INJECTIVE_RPC_URL: process.env.INJECTIVE_RPC_URL as string,
   NODE_ENV: process.env.NODE_ENV as string,
   FRONTEND_URLS: process.env.FRONTEND_URLS as string,
-  OPENAI_API_KEY:process.env.OPENAI_API_KEY as string,
-  OLLAMA_API_URL:process.env.OLLAMA_API_URL as string,
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY as string,
+  OLLAMA_API_URL: process.env.OLLAMA_API_URL as string,
   // API Docs
   API_DOCS_USER: process.env.API_DOCS_USER || "admin",
   API_DOCS_PASSWORD: process.env.API_DOCS_PASSWORD || "admin",
@@ -44,6 +49,11 @@ const REQUIRED_ENV = [
   "FRONTEND_URLS",
   "JWT_SECRET",
   "JWT_REFRESH_SECRET",
+  "WHATSAPP_API_BASE_URL",
+  "USER_ACCESS_TOKEN",
+  "PHONE_NUMBER_ID",
+  "WHATSAPP_BUSINESS_ACCOUNT_ID",
+  "WHATSAPP_VERIFY_TOKEN",
 ];
 
 // Check that all required env variables are set

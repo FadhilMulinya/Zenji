@@ -5,22 +5,12 @@ import {
   PrivateKey,
   MsgCreateSpotMarketOrder,
   spotPriceToChainPriceToFixed,
-  spotQuantityToChainQuantityToFixed
+  spotQuantityToChainQuantityToFixed,
+  getDefaultSubaccountId,
+  IndexerGrpcSpotApi,
+  spotPriceFromChainPriceToFixed,
 } from "@injectivelabs/sdk-ts";
 import { Network, getNetworkEndpoints } from "@injectivelabs/networks";
-import * as bech32Lib from "bech32";
-
-/**
- * Derive the correct Injective default subaccount ID (index 0).
- * Format: ethereum_hex_without_0x (40 chars) + 24 zero chars = 64 hex chars total.
- * The bech32 address encodes the same 20-byte pubkey hash as the Ethereum address.
- */
-function getDefaultSubaccountId(injectiveBech32: string): string {
-  const { words } = bech32Lib.decode(injectiveBech32);
-  const bytes = bech32Lib.fromWords(words); // 20-byte address
-  const hexAddr = Buffer.from(bytes).toString("hex").toLowerCase().padStart(40, "0");
-  return hexAddr + "000000000000000000000000"; // 40 + 24 = 64 hex chars (32 bytes)
-}
 
 const network = process.env.INJECTIVE_NETWORK?.toLowerCase() === "mainnet"
   ? Network.MainnetK8s
@@ -28,6 +18,8 @@ const network = process.env.INJECTIVE_NETWORK?.toLowerCase() === "mainnet"
 
 const endpoints = getNetworkEndpoints(network);
 const chainGrpcBankApi = new ChainGrpcBankApi(endpoints.grpc);
+const indexerSpotApi = new IndexerGrpcSpotApi(endpoints.indexer);
+
 
 const DENOM_DECIMALS: Record<string, number> = {
   inj: 18,
@@ -44,7 +36,9 @@ const DENOM_LABELS: Record<string, string> = {
 export class InjectiveService {
 
   static async getBalancesFormatted(address: string): Promise<string> {
-    const response = await chainGrpcBankApi.fetchBalances(address);
+    const fetchPromise = chainGrpcBankApi.fetchBalances(address);
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Injective Network gRPC timeout: fetchBalances took too long")), 15000));
+    const response = await Promise.race([fetchPromise, timeoutPromise]) as any;
     const balances = response.balances;
 
     if (!balances || balances.length === 0) {
@@ -77,9 +71,11 @@ export class InjectiveService {
       dstInjectiveAddress: toAddress,
     });
 
-    const response = await new MsgBroadcasterWithPk({ privateKey, network }).broadcast({
+    const broadcastPromise = new MsgBroadcasterWithPk({ privateKey, network }).broadcast({
       msgs: msg,
     });
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Injective Network RPC timeout: broadcast took too long")), 30000));
+    const response = await Promise.race([broadcastPromise, timeoutPromise]) as any;
     return response.txHash;
   }
 
@@ -105,25 +101,49 @@ export class InjectiveService {
       quoteDecimals: 6
     };
 
-    // For a market BUY order (USDT → INJ):
-    //   `amount` is the USDT the user wants to spend.
-    //   The spot market needs a quantity in terms of the BASE asset (INJ).
-    //   We use a conservative estimated price to derive INJ quantity:
-    //   injQty = usdtAmount / estimatedPricePerInj
-    //
-    // For a market SELL order (INJ → USDT):
-    //   `amount` is already the INJ to sell — use it directly.
-    //
-    // The order `price` is a cap/floor to guarantee fill:
-    //   Buy cap  = 100 USDT/INJ  (will fill at whatever market price, up to 100)
-    //   Sell floor = 0.001 USDT/INJ (will fill at whatever market price, above 0.001)
+    // Fetch live mid-price from the Injective indexer orderbook so
+    // 'swap X USDT to INJ' actually spends X USDT worth of INJ.
+    // Falls back to 15 USDT/INJ if the orderbook fetch fails.
+    let livePricePerInj = 15;
+    try {
+      const fetchPromise = indexerSpotApi.fetchOrderbookV2(marketId);
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Injective Network gRPC timeout: fetchOrderbook took too long")), 15000));
+      const orderbook = await Promise.race([fetchPromise, timeoutPromise]) as any;
+      const bestAsk = orderbook.sells?.[0]?.price;
+      const bestBid = orderbook.buys?.[0]?.price;
+      const toNum = (chainPrice: string) => parseFloat(
+        spotPriceFromChainPriceToFixed({ value: chainPrice, baseDecimals: 18, quoteDecimals: 6 })
+      );
+      if (bestAsk && bestBid) {
+        livePricePerInj = (toNum(bestAsk) + toNum(bestBid)) / 2;
+      } else if (bestAsk) {
+        livePricePerInj = toNum(bestAsk);
+      } else if (bestBid) {
+        livePricePerInj = toNum(bestBid);
+      }
+    } catch (priceErr) {
+      console.warn(`[swapTokens] Live price fetch failed, using fallback ${livePricePerInj}: ${priceErr}`);
+    }
 
-    const ESTIMATED_INJ_PRICE_USDT = 25; // conservative estimate; replace with live feed in future
-    const injQuantity = isBuy
-      ? amount / ESTIMATED_INJ_PRICE_USDT  // convert USDT spend → INJ quantity
-      : amount;                             // already in INJ
+    // BUY (USDT→INJ): amount = USDT to spend → injQuantity = usdtAmount / price
+    // SELL (INJ→USDT): amount = INJ to sell → use directly
+    let injQuantity = isBuy ? amount / livePricePerInj : amount;
 
-    const worseCasePrice = isBuy ? 100 : 0.001;
+    // The INJ/USDT market requires quantities in increments of 0.001 INJ (minQuantityTickSize).
+    // We strictly truncate to 3 decimal places to prevent "The quantity is not valid" errors.
+    injQuantity = Math.floor(injQuantity * 1000) / 1000;
+
+    if (injQuantity <= 0) {
+      throw new Error("Calculated quantity is too small to trade (minimum 0.001 INJ).");
+    }
+
+    // Cap/floor price must be a whole number to satisfy Injective's tick-size constraints.
+    // We use ceil/floor with +10% / -10% buffer around live price.
+    // Math: reserve_cost = injQuantity * cap = (amount/price) * (price*1.1) = amount*1.1
+    // So the locked balance is always ~1.1x the amount the user wants to spend.
+    const worseCasePrice = isBuy
+      ? Math.ceil(livePricePerInj * 1.1)   // round UP to nearest int (buy cap)
+      : Math.max(1, Math.floor(livePricePerInj * 0.9)); // round DOWN to nearest int, min 1 (sell floor)
 
     const msg = MsgCreateSpotMarketOrder.fromJSON({
       subaccountId: getDefaultSubaccountId(injectiveAddress),
@@ -142,9 +162,11 @@ export class InjectiveService {
       feeRecipient: injectiveAddress,
     });
 
-    const response = await new MsgBroadcasterWithPk({ privateKey, network }).broadcast({
+    const broadcastPromise = new MsgBroadcasterWithPk({ privateKey, network }).broadcast({
       msgs: msg,
     });
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Injective Network RPC timeout: broadcast took too long")), 30000));
+    const response = await Promise.race([broadcastPromise, timeoutPromise]) as any;
 
     return response.txHash;
   }

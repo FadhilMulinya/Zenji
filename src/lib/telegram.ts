@@ -2,6 +2,7 @@ import { Telegraf, Context, session } from "telegraf";
 import { ENV } from "./environments.ts";
 import { Logger } from "borgen";
 import * as tc from "../controllers/telegram/telegram.controller.ts";
+import { PROMPTS } from "./prompts.ts";
 
 class TelegramService {
   private bot: Telegraf<tc.MyContext>;
@@ -37,24 +38,17 @@ class TelegramService {
     this.bot.command("switchagent", tc.handleSwitchAgent);
     this.bot.command("createagent", tc.handleCreateAgentPrompt);
     this.bot.command("help", (ctx) => {
-      ctx.reply(
-        "Available commands:\n" +
-        "/start - Welcome & status\n" +
-        "/createagent - Create a new AI agent\n" +
-        "/myagents - View your agents\n" +
-        "/switchagent - Switch active agent\n" +
-        "/account - Check active agent's balance\n" +
-        "/help - Show this message\n" +
-        "/cancel - Cancel current operation"
-      );
+      ctx.reply(PROMPTS.COMMANDS_HELP);
     });
     this.bot.command("cancel", async (ctx) => {
       ctx.session.state = undefined;
       ctx.session.tempData = undefined;
-      await ctx.reply("Operation cancelled.");
+      await ctx.reply(PROMPTS.CANCELLED);
     });
 
     // Callback actions
+    this.bot.action("auth_login", tc.handleAuthLogin);
+    this.bot.action("auth_signup", tc.handleAuthSignup);
     this.bot.action("create_agent", tc.handleCreateAgentPrompt);
     this.bot.action("receive_faucet", tc.handleFaucet);
     this.bot.action(/^switch_agent:/, tc.handleSwitchAgentCallback);

@@ -52,6 +52,7 @@ async function generateCharacterTraits(name: string, persona: string): Promise<a
         const ollama = createOllama({ baseURL: ENV.OLLAMA_API_URL || "http://localhost:11434/api" });
         const { text: rawText } = await aiSdkGenerateText({
             model: ollama("llama3.2:3b"),
+            abortSignal: AbortSignal.timeout(300000), // 5 minutes timeout
             prompt: `You are a JSON generator. Generate a character profile for an AI trading agent.
 
 Agent Name: "${name}"
@@ -328,6 +329,58 @@ class AgentService {
             });
             Logger.info({ message: `[handleMessage] Memory fetched in ${Date.now() - t1}ms` });
 
+            // ── Rule-based fast path: bypass LLM entirely for clear send/swap commands ──
+            // This prevents llama3.2:3b's confirmation loops and halluciations.
+            const directIntent = parseIntentFromMessage(text);
+            if (directIntent) {
+                Logger.info({ message: `[handleMessage] Direct intent detected: ${directIntent.action} — bypassing LLM` });
+                const wallet = await Wallet.findOne({ agent_id: agentDoc._id });
+                if (!wallet) throw new Error("Agent wallet not configured.");
+                const privateKey = decryptPrivateKey(wallet.encrypted_private_key);
+
+                let txHash = "";
+                let directReply = "";
+                try {
+                    if (directIntent.action === "SEND_TOKEN") {
+                        txHash = await InjectiveService.sendTokens(
+                            privateKey,
+                            directIntent.recipient!,
+                            directIntent.amount,
+                            directIntent.denom || "INJ"
+                        );
+                        directReply = `✅ Sent ${directIntent.amount} ${directIntent.denom || "INJ"} to ${directIntent.recipient}.\n\n🔗 Tx Hash: ${txHash}`;
+                    } else if (directIntent.action === "SWAP_TOKEN") {
+                        txHash = await InjectiveService.swapTokens(
+                            privateKey,
+                            directIntent.fromToken!,
+                            directIntent.toToken!,
+                            directIntent.amount
+                        );
+                        directReply = `✅ Swapped ${directIntent.amount} ${directIntent.fromToken} → ${directIntent.toToken}.\n\n🔗 Tx Hash: ${txHash}`;
+                    }
+                } catch (err: any) {
+                    Logger.error({ message: `[handleMessage] Direct action failed: ${err.message}` });
+                    directReply = `❌ Transaction failed: ${err.message}`;
+                }
+
+                // Store memories and return
+                const agentMemDirect: Memory = {
+                    id: stringToUuid(uuidv4()),
+                    userId: runtime.agentId,
+                    agentId: runtime.agentId,
+                    roomId: agentDoc.room_id as UUID,
+                    content: { text: directReply, source: "telegram", action: directIntent.action },
+                    createdAt: Date.now() + 1,
+                };
+                await runtime.messageManager.createMemory(userMemory);
+                await runtime.messageManager.createMemory(agentMemDirect);
+
+                Logger.info({ message: `[handleMessage] Total: ${Date.now() - t0}ms (direct path) — "${directReply.substring(0, 80)}"` });
+                return directReply;
+            }
+
+            // ── LLM path: for balance queries and natural conversation ──
+
             // Build conversation history string
             const historyLines = recentMemories
                 .reverse()
@@ -338,19 +391,33 @@ class AgentService {
                 })
                 .join("\n");
 
-            // Detect if this is a balance/portfolio query and inject real data
-            // NOTE: keep this regex narrow — avoid matching token names like 'inj'/'usdt' alone
-            const balanceKeywords = /\bbalance\b|\bportfolio\b|\bhow much\b|\bcheck\b|\bmy funds\b|\bmy assets\b|\bmy tokens\b/i;
-            let walletContext = "";
+            // ── Fast path for balance queries: bypass LLM entirely ──
+            // Regex intentionally narrow — \bcheck\b alone matches 'check my strategy' etc.
+            const balanceKeywords = /\bbalance\b|\bportfolio\b|\bhow much do i have\b|\bhow much (?:inj|usdt)\b|\bmy funds\b|\bmy assets\b|\bmy tokens\b|\bcheck (?:my )?(?:balance|wallet|funds|portfolio)\b/i;
             if (balanceKeywords.test(text)) {
-                Logger.info({ message: `[handleMessage] Balance query detected — fetching real on-chain data` });
+                Logger.info({ message: `[handleMessage] Balance query — fetching real on-chain data (no-LLM path)` });
                 const ctx = await this.fetchWalletContext(agentDoc._id);
-                if (ctx) {
-                    walletContext = `\n[REAL WALLET DATA — use these exact numbers, do NOT make up values]\n${ctx}\n`;
-                }
+                const balanceReply = ctx
+                    ? `💰 Your on-chain balances:\n\n${ctx}`
+                    : "⚠️ No balances found for your wallet on-chain. Use /account for more details or request test tokens with /faucet.";
+
+                const agentBalMem: Memory = {
+                    id: stringToUuid(uuidv4()),
+                    userId: runtime.agentId,
+                    agentId: runtime.agentId,
+                    roomId: agentDoc.room_id as UUID,
+                    content: { text: balanceReply, source: "telegram" },
+                    createdAt: Date.now() + 1,
+                };
+                await runtime.messageManager.createMemory(userMemory);
+                await runtime.messageManager.createMemory(agentBalMem);
+                Logger.info({ message: `[handleMessage] Total: ${Date.now() - t0}ms (balance fast-path)` });
+                return balanceReply;
             }
 
-            // Direct Ollama call — one shot, plain text
+            // ── LLM path: for natural conversation only ──
+            // Uses llama3.2:1b by default (~3x faster than 3b). Override with OLLAMA_MODEL env var.
+            const ollamaModel = (process.env.OLLAMA_MODEL || "llama3.2:1b");
             const ollama = createOllama({
                 baseURL: ENV.OLLAMA_API_URL || "http://localhost:11434/api"
             });
@@ -359,14 +426,7 @@ class AgentService {
                 ? character.bio.slice(0, 2).join(" ")
                 : (character.bio || "");
 
-            // Fetch Eliza's state to get provider data (like wallet info)
-            const elizaState = await runtime.composeState(userMemory);
-            const providerContext = elizaState.walletInfo || "";
-
             const prompt = `You are ${character.name}. ${bio}
-
-[REAL WALLET DATA - use ONLY these numbers, never invent balances]
-${walletContext || providerContext || "(no wallet data requested)"}
 
 [RULES — follow exactly]
 1. When the user wants to SEND tokens and you have BOTH the recipient address AND the amount: output ONLY this JSON block and nothing else:
@@ -404,10 +464,12 @@ ${telegramUserName || "User"}: ${text}
 ${character.name}:`;
 
             const t3 = Date.now();
+            Logger.info({ message: `[handleMessage] Calling LLM (${ollamaModel})...` });
             const { text: responseText } = await aiSdkGenerateText({
-                model: ollama("llama3.2:3b"),
+                model: ollama(ollamaModel),
                 prompt,
-                maxTokens: 256,
+                maxTokens: 150,
+                abortSignal: AbortSignal.timeout(300000), // 5 minutes timeout
             });
             Logger.info({ message: `[handleMessage] Text generated in ${Date.now() - t3}ms` });
 
@@ -416,6 +478,7 @@ ${character.name}:`;
                 Logger.warn({ message: `[handleMessage] Empty response from Ollama` });
                 return "I processed your message but had nothing to say. Try again!";
             }
+
 
             // Clean up the reply and detect JSON action matching
             let finalReply = reply;
@@ -489,3 +552,5 @@ ${character.name}:`;
 }
 
 export const agentService = new AgentService();
+
+

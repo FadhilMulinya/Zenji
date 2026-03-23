@@ -3,9 +3,14 @@ import connectDb from "./database/connectDB.ts";
 import { telegramService } from "./lib/telegram.ts";
 import { ENV } from "./lib/environments.ts";
 import { Logger } from "borgen";
+import { whatsappController } from "./controllers/whatsapp/whatsapp.controller.ts";
 
 const app = express();
 app.use(express.json());
+
+// WhatsApp Webhook Routes
+app.get("/whatsapp", (req, res) => whatsappController.verifyWebhook(req, res));
+app.post("/whatsapp", (req, res) => whatsappController.handleWebhook(req, res));
 
 const startServer = async () => {
   try {
