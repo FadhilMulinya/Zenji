@@ -3,8 +3,10 @@
 Zenji is a **social toolkit** that lets anyone create and run automated trading agents on **Injective** just by chatting in natural language. 
 
 ### 🚀 Try it Now
-The official Zenji bot is live on Telegram: **[@injzenji_bot](https://t.me/injzenji_bot)**.  
+The official Zenji is live on Telegram: **[@injzenji_bot](https://t.me/injzenji_bot)** and whatsapp via this number **wa.me/+254799544307**.  
 Simply start a chat to set up your account and begin launching your own trading agents and strategies!
+
+Currently everything is on testnet , and we are using local LLMs to run the agents , hence the uptime is not guaranteed since we are relying on my local machines to run the agents.
 
 ---
 
@@ -17,16 +19,16 @@ Each agent is your **trading partner**: chat with it for tips, insights, or to e
 
 ##  Features
 
-- **Telegram‑Native UX**  
+- **Whatsapp / Telegram‑Native UX with other social platforms coming soon**  
   Launch and manage agents directly from your favorite chat app.
 - **Auto Wallet Creation**  
   A dedicated Injective wallet is generated for every agent you create.
 - **Natural Language Execution**  
-  "Send 0.01 INJ to inj1..." or "Swap 1 USDT to INJ".
+  example prompts"Send 0.01 INJ to inj1..." or "Swap 1 USDT to INJ".
 - **Rule-Based & AI Hybrid**  
   Uses a rule-based regex parser for fast, reliable common commands, falling back to a fine-tuned LLM prompt for complex reasoning.
 - **Direct Chain Execution**  
-  Low-latency broadcasting using the Injective SDK.
+  Low-latency broadcasting using the iAgent SDK.
 
 ---
 
@@ -49,7 +51,7 @@ When you run `/createagent`, you'll be asked for a **Name** and a **Persona**. I
 
 ### 📑 Agent Profile Template (Persona/Strategy)
 
-To get the best out of your agent, you can edit the persona using this template:
+To get the best out of your agent, you can try the persona using this template:
 
 1.  **Agent Name:** (e.g., Alpha Hunter, Calm Liquidity Maker)
 2.  **Trading Personality:**
@@ -105,10 +107,7 @@ npm install
 ```bash
 cp .env.example .env
 ```
-- **BOT_TOKEN**: Your token from [@BotFather](https://t.me/botfather). (Default test token provided in `.env.example`).
-- **MONGO_URI**: Your MongoDB connection string.
-- **OLLAMA_API_URL**: Default is `http://localhost:11434/api` (for local models).
-- **INJECTIVE_NETWORK**: Set to `testnet` or `mainnet`.
+** set other variables as needed **
 
 ### 3. Running
 ```bash
@@ -121,22 +120,28 @@ npm run dev
 
 ```
 src/
-├── controllers/      # Telegram bot command handlers & callbacks
+├── controllers/      # Telegram/whatsapp  command handlers & callbacks
 ├── services/         # Business Logic (Agent, Injective, Wallet, Bank)
 ├── models/           # Mongoose Schemas (User, Agent, Wallet)
-├── lib/              # Adapters (MongoDB), environments, and utilities
-└── characters/       # ElizaOS style character definitions
+├── lib/              # environments, prompts, and utilities
+└── characters/       # ElizaOS style character definition
+└── database/         # Database connection and seeding
+└── iagent/           # iagent core sdk and tools
+    app.ts            # zenji Server starter
+    
 ```
 
 ---
 
 ##  AI Models & Providers
 
-Zenji is model‑agnostic. By default, it uses **Ollama** (`llama3.2:3b`) for local execution and with ollama you dont need an api key and your prompts are stored locally on your machine. You can switch to **OpenAI** or **Anthropic** in `agent.service.ts` to upgrade your agent's reasoning power.
+Zenji is model‑agnostic. By default, it uses **Ollama** (`qwen2.5:3b`) for local execution and with ollama you dont need an api keys and your prompts are stored locally on your machine or your own server. You can switch to **OpenAI** or **Anthropic** in `agent.service.ts` to upgrade your agent's reasoning power.
+
+*** I used ollama to build this project because i didnt have a paid api key for openai or anthropic. ***
 
 ---
 
 ##  Disclaimer
 
-Zenji is an experimental hackathon project. Not financial advice. Use at your own risk.
+Zenji is an experimental hackathon project. Not financial tooling advice. Use at your own risk.
 
