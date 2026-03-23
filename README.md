@@ -3,7 +3,7 @@
 Zenji is a **social toolkit** that lets anyone create and run automated trading agents on **Injective** just by chatting in natural language. 
 
 ### 🚀 Try it Now
-The official Zenji is live on Telegram: **[@injzenji_bot](https://t.me/injzenji_bot)** and whatsapp via this number **wa.me/+254799544307**.  
+The official Zenji is live on Telegram: **[@injzenji_bot](https://t.me/injzenji_bot)** and whatsapp via this number **wa.me/+1 (555) 167-2085**.  
 Simply start a chat to set up your account and begin launching your own trading agents and strategies!
 
 Currently everything is on testnet , and we are using local LLMs to run the agents , hence the uptime is not guaranteed since we are relying on my local machines to run the agents.
